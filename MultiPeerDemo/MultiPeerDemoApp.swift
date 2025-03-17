@@ -38,10 +38,6 @@ struct MultiPeerDemoApp: App {
         print("💻 Running on macOS device")
         #endif
         
-        // Check if we have the necessary Info.plist entries
-        print("⚠️ Make sure the required Info.plist entries (NSLocalNetworkUsageDescription, NSBonjourServices) are added in Xcode")
-        print("⚠️ If connectivity doesn't work, please check the Xcode Info.plist settings")
-        
         print("📡 Service type: mpd-messages")
     }
     
