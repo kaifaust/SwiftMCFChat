@@ -651,11 +651,12 @@ class MultipeerService: NSObject, ObservableObject {
     func forgetDevice(userId: String, andBlock: Bool = false) {
         print("🧹 Forgetting device with userId: \(userId)")
         
-        // Send forget request to connected peers if possible
-        // This will attempt to have the other device also forget us (best-effort)
-        sendForgetRequest(forUserId: userId)
-        
+        // Perform UI-related operations on the main thread
         DispatchQueue.main.async {
+            // Send forget request to connected peers if possible
+            // This will attempt to have the other device also forget us (best-effort)
+            self.sendForgetRequest(forUserId: userId)
+            
             // Remove from known peers
             self.knownPeers.removeAll { $0.userId == userId }
             
@@ -685,62 +686,63 @@ class MultipeerService: NSObject, ObservableObject {
     
     /// Disconnect from a specific user by ID
     private func disconnectUser(userId: String) {
-        // Find all connected peers with this userId
-        let peersToDisconnect = discoveredPeers.filter { 
-            $0.state == .connected && 
-            $0.discoveryInfo?["userId"] == userId 
-        }.map { $0.peerId }
-        
-        for peerId in peersToDisconnect {
-            // We can't directly disconnect a specific peer in MCSession
-            // So we'll need to create a new session without this peer
-            print("❌ Disconnecting from user \(userId) on device \(peerId.displayName)")
-        }
-        
-        // If we need to disconnect from specific peers but keep others connected,
-        // we'd need to recreate the session and only invite the peers we want to keep
-        if !peersToDisconnect.isEmpty {
-            print("🔄 Recreating session to remove specific peers")
+        // Make sure we're on the main thread for all UI updates and property access
+        DispatchQueue.main.async {
+            // Find all connected peers with this userId
+            let peersToDisconnect = self.discoveredPeers.filter { 
+                $0.state == .connected && 
+                $0.discoveryInfo?["userId"] == userId 
+            }.map { $0.peerId }
             
-            // Store current browsing and hosting states
-            let wasBrowsing = isBrowsing
-            let wasHosting = isHosting
-            
-            // Stop current browsing and advertising
-            if wasBrowsing {
-                stopBrowsing()
-            }
-            if wasHosting {
-                stopHosting()
+            for peerId in peersToDisconnect {
+                // We can't directly disconnect a specific peer in MCSession
+                // So we'll need to create a new session without this peer
+                print("❌ Disconnecting from user \(userId) on device \(peerId.displayName)")
             }
             
-            // Disconnect current session
-            session.disconnect() // This will disconnect all peers
-            
-            // Create a new session
-            session = MCSession(
-                peer: myPeerId,
-                securityIdentity: nil,
-                encryptionPreference: .required
-            )
-            session.delegate = self
-            
-            // Update connection state for all peers
-            DispatchQueue.main.async {
+            // If we need to disconnect from specific peers but keep others connected,
+            // we'd need to recreate the session and only invite the peers we want to keep
+            if !peersToDisconnect.isEmpty {
+                print("🔄 Recreating session to remove specific peers")
+                
+                // Store current browsing and hosting states
+                let wasBrowsing = self.isBrowsing
+                let wasHosting = self.isHosting
+                
+                // Stop current browsing and advertising
+                if wasBrowsing {
+                    self.stopBrowsing()
+                }
+                if wasHosting {
+                    self.stopHosting()
+                }
+                
+                // Disconnect current session
+                self.session.disconnect() // This will disconnect all peers
+                
+                // Create a new session
+                self.session = MCSession(
+                    peer: self.myPeerId,
+                    securityIdentity: nil,
+                    encryptionPreference: .required
+                )
+                self.session.delegate = self
+                
+                // Update connection state for all peers
                 for i in 0..<self.discoveredPeers.count {
                     if self.discoveredPeers[i].state == .connected {
                         self.discoveredPeers[i].state = .disconnected
                     }
                 }
                 self.connectedPeers = []
-            }
-            
-            // Restart browsing and advertising if they were active
-            if wasBrowsing {
-                startBrowsing()
-            }
-            if wasHosting {
-                startHosting()
+                
+                // Restart browsing and advertising if they were active
+                if wasBrowsing {
+                    self.startBrowsing()
+                }
+                if wasHosting {
+                    self.startHosting()
+                }
             }
         }
     }
@@ -752,12 +754,21 @@ class MultipeerService: NSObject, ObservableObject {
     
     /// Send a request to other devices to forget this device (best effort)
     private func sendForgetRequest(forUserId userId: String) {
-        let forgetRequest = ForgetDeviceRequest(userId: userId)
+        // Capture session to avoid potential threading issues
+        let currentSession = self.session
+        let currentPeers = currentSession.connectedPeers
         
         do {
+            let forgetRequest = ForgetDeviceRequest(userId: userId)
             let forgetData = try JSONEncoder().encode(forgetRequest)
-            try session.send(forgetData, toPeers: session.connectedPeers, with: .reliable)
-            print("📤 Sent forget request for userId \(userId) to \(session.connectedPeers.count) peers")
+            
+            // Only attempt to send if we have connected peers
+            if !currentPeers.isEmpty {
+                try currentSession.send(forgetData, toPeers: currentPeers, with: .reliable)
+                print("📤 Sent forget request for userId \(userId) to \(currentPeers.count) peers")
+            } else {
+                print("ℹ️ No connected peers to send forget request to")
+            }
         } catch {
             print("❌ Failed to send forget request: \(error.localizedDescription)")
         }
@@ -911,35 +922,34 @@ extension MultipeerService: MCSessionDelegate {
     private func handleForgetDeviceRequest(userId: String, fromPeer peerID: MCPeerID) {
         print("🔄 Processing forget device request for userId: \(userId) from \(peerID.displayName)")
         
-        // Get the current state
-        let wasBrowsing = isBrowsing
-        let wasHosting = isHosting
-        
-        // First, break the active connection (this is needed for proper rediscovery)
-        if session.connectedPeers.contains(peerID) {
-            // Need to recreate the session to disconnect this specific peer
+        // Get the current state on the main thread to avoid threading issues
+        DispatchQueue.main.async {
+            let wasBrowsing = self.isBrowsing
+            let wasHosting = self.isHosting
             
-            // Stop browsing and advertising temporarily
-            if wasBrowsing {
-                stopBrowsing()
-            }
-            if wasHosting {
-                stopHosting()
-            }
-            
-            // Disconnect the session
-            session.disconnect()
-            
-            // Create a new session
-            session = MCSession(
-                peer: myPeerId,
-                securityIdentity: nil,
-                encryptionPreference: .required
-            )
-            session.delegate = self
-            
-            // Update connection states
-            DispatchQueue.main.async {
+            // First, break the active connection (this is needed for proper rediscovery)
+            if self.session.connectedPeers.contains(peerID) {
+                // Need to recreate the session to disconnect this specific peer
+                
+                // Stop browsing and advertising temporarily
+                if wasBrowsing {
+                    self.stopBrowsing()
+                }
+                if wasHosting {
+                    self.stopHosting()
+                }
+                
+                // Disconnect the session
+                self.session.disconnect()
+                
+                // Create a new session
+                self.session = MCSession(
+                    peer: self.myPeerId,
+                    securityIdentity: nil,
+                    encryptionPreference: .required
+                )
+                self.session.delegate = self
+                
                 // Update all connected peers to disconnected
                 for i in 0..<self.discoveredPeers.count {
                     if self.discoveredPeers[i].state == .connected {
@@ -947,18 +957,16 @@ extension MultipeerService: MCSessionDelegate {
                     }
                 }
                 self.connectedPeers = []
+                
+                // Restart browsing and advertising
+                if wasBrowsing {
+                    self.startBrowsing()
+                }
+                if wasHosting {
+                    self.startHosting()
+                }
             }
             
-            // Restart browsing and advertising
-            if wasBrowsing {
-                startBrowsing()
-            }
-            if wasHosting {
-                startHosting()
-            }
-        }
-        
-        DispatchQueue.main.async {
             // Remove from known peers
             self.knownPeers.removeAll { $0.userId == userId }
             
