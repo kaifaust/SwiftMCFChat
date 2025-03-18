@@ -62,10 +62,15 @@ class MultipeerService: NSObject, ObservableObject {
     // Messages array with ChatMessage objects instead of strings
     @Published var messages: [ChatMessage] = [] {
         didSet {
-            // Save messages to UserDefaults whenever they change
-            saveMessages()
+            // Only save messages when actually changed (not during initial load)
+            if !isInitialLoad {
+                saveMessages()
+            }
         }
     }
+    
+    // Flag to prevent saving during initial load
+    private var isInitialLoad = true
     
     // Track devices we're syncing with and their message histories
     private var pendingSyncs: [MCPeerID: [ChatMessage]] = [:]
@@ -309,7 +314,17 @@ class MultipeerService: NSObject, ObservableObject {
         
         // Add message to our local list
         DispatchQueue.main.async {
+            // Prevent redundant saves when adding a single message
+            let wasInitialLoad = self.isInitialLoad
+            self.isInitialLoad = true
+            
             self.messages.append(chatMessage)
+            
+            // Restore state and save manually
+            self.isInitialLoad = wasInitialLoad
+            if !self.isInitialLoad {
+                self.saveMessages()
+            }
         }
         
         // If we have no connected peers, just save the message locally
@@ -326,7 +341,17 @@ class MultipeerService: NSObject, ObservableObject {
         } catch {
             print("❌ Error sending message: \(error.localizedDescription)")
             DispatchQueue.main.async {
+                // Prevent redundant saves
+                let wasInitialLoad = self.isInitialLoad
+                self.isInitialLoad = true
+                
                 self.messages.append(ChatMessage.systemMessage("Failed to send message - \(error.localizedDescription)"))
+                
+                // Restore state and save manually
+                self.isInitialLoad = wasInitialLoad
+                if !self.isInitialLoad {
+                    self.saveMessages()
+                }
             }
         }
     }
@@ -348,6 +373,7 @@ class MultipeerService: NSObject, ObservableObject {
     private func loadMessages() {
         guard let data = UserDefaults.standard.data(forKey: UserDefaultsKeys.messages) else {
             print("ℹ️ No messages found in UserDefaults")
+            isInitialLoad = false
             return
         }
         
@@ -357,9 +383,12 @@ class MultipeerService: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 self.messages = loadedMessages
                 print("📂 Loaded \(loadedMessages.count) messages from UserDefaults")
+                // Set isInitialLoad to false after successfully loading messages
+                self.isInitialLoad = false
             }
         } catch {
             print("❌ Failed to load messages: \(error.localizedDescription)")
+            isInitialLoad = false
         }
     }
     
@@ -381,7 +410,7 @@ class MultipeerService: NSObject, ObservableObject {
     
     // Special message type for syncing
     struct SyncMessage: Codable {
-        let type = "sync"
+        var type = "sync"
         let messages: [ChatMessage]
     }
     
@@ -405,8 +434,17 @@ class MultipeerService: NSObject, ObservableObject {
     func clearAllMessages() {
         print("🧹 Clearing all messages")
         DispatchQueue.main.async {
-            // Keep only a new system message
+            // Keep only a new system message and avoid redundant saves
+            let wasInitialLoad = self.isInitialLoad
+            self.isInitialLoad = true
+            
             self.messages = [ChatMessage.systemMessage("Chat history cleared")]
+            
+            // Restore state and save manually
+            self.isInitialLoad = wasInitialLoad
+            if !self.isInitialLoad {
+                self.saveMessages()
+            }
         }
     }
 }
@@ -614,12 +652,25 @@ extension MultipeerService: MCSessionDelegate {
         
         // If we have new messages, add them and sort by timestamp
         if !newMessages.isEmpty {
+            // Temporarily disable saving while we make batch changes
+            let wasInitialLoad = self.isInitialLoad
+            self.isInitialLoad = true
+            
+            // Make all changes at once
             self.messages.append(contentsOf: newMessages)
             self.messages.sort(by: { $0.timestamp < $1.timestamp })
-            print("✅ Added \(newMessages.count) new messages from sync")
             
             // Add a system message about the sync
             self.messages.append(ChatMessage.systemMessage("Synced \(newMessages.count) messages from \(peerID.displayName)"))
+            
+            // Restore previous state and trigger a single save
+            self.isInitialLoad = wasInitialLoad
+            print("✅ Added \(newMessages.count) new messages from sync")
+            
+            // Manual save once after all changes
+            if !self.isInitialLoad {
+                self.saveMessages()
+            }
         } else {
             print("ℹ️ No new messages from sync")
         }
@@ -668,6 +719,10 @@ extension MultipeerService: MCSessionDelegate {
             // Replace our user messages with the remote ones, but keep our system messages
             print("🔄 Using remote message history from \(peerID.displayName)")
             DispatchQueue.main.async {
+                // Temporarily disable saving during batch operations
+                let wasInitialLoad = self.isInitialLoad
+                self.isInitialLoad = true
+                
                 // Keep only our system messages
                 let ourSystemMessages = self.messages.filter { $0.isSystemMessage }
                 
@@ -680,12 +735,28 @@ extension MultipeerService: MCSessionDelegate {
                 
                 // Add info message
                 self.messages.append(ChatMessage.systemMessage("Adopted message history from \(peerID.displayName)"))
+                
+                // Restore previous state and trigger a single save
+                self.isInitialLoad = wasInitialLoad
+                if !self.isInitialLoad {
+                    self.saveMessages()
+                }
             }
         } else {
             // Keep our message history and add a system message
             print("🔄 Keeping local message history")
             DispatchQueue.main.async {
+                // Temporarily disable saving
+                let wasInitialLoad = self.isInitialLoad
+                self.isInitialLoad = true
+                
                 self.messages.append(ChatMessage.systemMessage("Kept local message history"))
+                
+                // Restore previous state and trigger a single save
+                self.isInitialLoad = wasInitialLoad
+                if !self.isInitialLoad {
+                    self.saveMessages()
+                }
             }
         }
         
@@ -697,7 +768,7 @@ extension MultipeerService: MCSessionDelegate {
     
     // Special message type for sync decisions
     struct SyncDecision: Codable {
-        let type = "sync_decision"
+        var type = "sync_decision"
         let useRemote: Bool // true = sender is using receiver's history, false = sender is keeping their own history
     }
     

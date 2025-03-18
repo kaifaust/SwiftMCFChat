@@ -151,7 +151,7 @@ struct ContentView: View {
                         .id(message.id)
                         .padding(.vertical, 2)
                     }
-                    .onChange(of: multipeerService.messages.count) { _ in
+                    .onChange(of: multipeerService.messages.count) { oldCount, newCount in
                         if !multipeerService.messages.isEmpty {
                             withAnimation {
                                 scrollView.scrollTo(multipeerService.messages.count - 1, anchor: .bottom)
@@ -163,7 +163,7 @@ struct ContentView: View {
             }
             
             // Sync conflict resolution alert
-            .onChange(of: multipeerService.hasPendingSyncDecision) { hasPending in
+            .onChange(of: multipeerService.hasPendingSyncDecision) { oldValue, hasPending in
                 showSyncConflictAlert = hasPending
             }
             .alert("Message History Conflict", isPresented: $showSyncConflictAlert) {
@@ -328,13 +328,17 @@ struct ContentView: View {
         // Use SwiftUI alert for macOS
         // This is a simplified approach for the demo
         // In a real app, you would have a more sophisticated approach
-        let acceptAction = {
+        // Actions are defined but not used directly - macOS uses text commands instead
+        // These are here for reference but we'll comment them out to avoid warnings
+        /*
+        _ = {
             multipeerService.acceptInvitation(from: peer, accept: true)
         }
         
-        let declineAction = {
+        _ = {
             multipeerService.acceptInvitation(from: peer, accept: false)
         }
+        */
         
         // For macOS we'll add a system message with accept/decline options
         DispatchQueue.main.async {
