@@ -18,6 +18,7 @@ struct ContentView: View {
     @State private var isConnecting = false
     @State private var showInfoAlert = false
     @State private var showPeersList = false
+    @State private var showSyncConflictAlert = false
     
     var body: some View {
         VStack {
@@ -99,32 +100,36 @@ struct ContentView: View {
             // Message list with improved styling and autoscroll
             ScrollViewReader { scrollView in
                 List {
-                    ForEach(Array(multipeerService.messages.enumerated()), id: \.element) { index, message in
+                    ForEach(multipeerService.messages) { message in
                         HStack {
-                            if message.starts(with: "System:") {
+                            if message.isSystemMessage {
                                 Image(systemName: "exclamationmark.circle")
                                     .foregroundColor(.gray)
                                 
-                                Text(message)
+                                Text(message.content)
                                     .foregroundColor(.gray)
                                     .italic()
                                     .font(.footnote)
-                            } else if message.starts(with: "Me:") {
-                                Text(message)
+                            } else if message.senderId == multipeerService.userId {
+                                // Messages from the current user (displayed on the right)
+                                Text(message.content)
                                     .foregroundColor(.blue)
                                     .padding(6)
                                     .background(Color.blue.opacity(0.1))
                                     .cornerRadius(8)
                                     .frame(maxWidth: .infinity, alignment: .trailing)
                             } else {
-                                Text(message)
+                                // Messages from other devices with the same user ID (also displayed on the right)
+                                // In our cloned chat implementation, all messages from the same user ID should be aligned the same way
+                                Text(message.content)
+                                    .foregroundColor(.blue)
                                     .padding(6)
-                                    .background(Color.gray.opacity(0.1))
+                                    .background(Color.blue.opacity(0.1))
                                     .cornerRadius(8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
                             }
                         }
-                        .id(index)
+                        .id(message.id)
                         .padding(.vertical, 2)
                     }
                     .onChange(of: multipeerService.messages.count) { _ in
@@ -136,6 +141,26 @@ struct ContentView: View {
                     }
                 }
                 .listStyle(.plain)
+            }
+            
+            // Sync conflict resolution alert
+            .onChange(of: multipeerService.hasPendingSyncDecision) { hasPending in
+                showSyncConflictAlert = hasPending
+            }
+            .alert("Message History Conflict", isPresented: $showSyncConflictAlert) {
+                Button("Use Remote History", role: .destructive) {
+                    multipeerService.resolveMessageSyncConflict(useRemote: true)
+                }
+                
+                Button("Keep Local History", role: .cancel) {
+                    multipeerService.resolveMessageSyncConflict(useRemote: false)
+                }
+            } message: {
+                if let peerID = multipeerService.pendingSyncPeer {
+                    Text("There is a conflict between your message history and \(peerID.displayName)'s history. Which one would you like to keep?")
+                } else {
+                    Text("There is a conflict between message histories. Which one would you like to keep?")
+                }
             }
             
             // Connection controls
@@ -205,8 +230,8 @@ struct ContentView: View {
             .padding()
         }
         .onAppear {
-            multipeerService.messages.append("System: Welcome to MultipeerDemo")
-            multipeerService.messages.append("System: Click Connect to start")
+            multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Welcome to MultipeerDemo"))
+            multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Click Connect to start"))
         }
     }
     
@@ -220,9 +245,9 @@ struct ContentView: View {
                 $0.peerId.displayName == peerName && $0.state == .invitationReceived 
             }) {
                 multipeerService.acceptInvitation(from: peerInfo, accept: true)
-                multipeerService.messages.append("System: Accepted invitation from \(peerName)")
+                multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Accepted invitation from \(peerName)"))
             } else {
-                multipeerService.messages.append("System: Could not find pending invitation from \(peerName)")
+                multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Could not find pending invitation from \(peerName)"))
             }
         } else if messageText.lowercased().starts(with: "decline ") {
             let peerName = messageText.dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -230,9 +255,9 @@ struct ContentView: View {
                 $0.peerId.displayName == peerName && $0.state == .invitationReceived
             }) {
                 multipeerService.acceptInvitation(from: peerInfo, accept: false)
-                multipeerService.messages.append("System: Declined invitation from \(peerName)")
+                multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Declined invitation from \(peerName)"))
             } else {
-                multipeerService.messages.append("System: Could not find pending invitation from \(peerName)")
+                multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Could not find pending invitation from \(peerName)"))
             }
         } else {
             // Regular message
@@ -294,8 +319,8 @@ struct ContentView: View {
         
         // For macOS we'll add a system message with accept/decline options
         DispatchQueue.main.async {
-            multipeerService.messages.append("System: Connection request from \(peer.peerId.displayName)")
-            multipeerService.messages.append("System: Type 'accept \(peer.peerId.displayName)' or 'decline \(peer.peerId.displayName)'")
+            multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Connection request from \(peer.peerId.displayName)"))
+            multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Type 'accept \(peer.peerId.displayName)' or 'decline \(peer.peerId.displayName)'"))
             
             // In a real app, you'd use a proper alert or dialog here
             // This is just a workaround for this demo
