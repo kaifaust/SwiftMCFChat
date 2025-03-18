@@ -20,6 +20,8 @@ struct ContentView: View {
     @State private var showPeersList = false
     @State private var showSyncConflictAlert = false
     @State private var showClearConfirmation = false
+    @State private var showConnectionRequestAlert = false
+    @State private var currentInvitationPeer: MultipeerService.PeerInfo?
     
     var body: some View {
         VStack {
@@ -77,13 +79,13 @@ struct ContentView: View {
                 Text("Are you sure you want to clear all messages? This action cannot be undone.")
             }
             
-            // Nearby devices section
-            if isConnecting && !multipeerService.discoveredPeers.isEmpty {
+            // Devices section with Connections and Available subsections
+            if isConnecting {
                 VStack(alignment: .leading) {
                     HStack {
-                        Text("Nearby Devices")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                        Text("Devices")
+                            .font(.headline)
+                            .foregroundColor(.primary)
                         
                         Spacer()
                         
@@ -97,17 +99,77 @@ struct ContentView: View {
                     }
                     
                     if showPeersList {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                ForEach(multipeerService.discoveredPeers) { peer in
-                                    PeerItemView(peer: peer) {
-                                        handlePeerAction(peer)
-                                    }
-                                }
+                        // Connected devices section
+                        VStack(alignment: .leading) {
+                            Text("Connections")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 4)
+                            
+                            let connectedPeers = multipeerService.discoveredPeers.filter { 
+                                $0.state == .connected || $0.state == .connecting
                             }
-                            .padding(.vertical, 4)
+                            
+                            if !connectedPeers.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 10) {
+                                        ForEach(connectedPeers) { peer in
+                                            PeerItemView(peer: peer) {
+                                                handlePeerAction(peer)
+                                            }
+                                        }
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                                .frame(height: 90)
+                            } else {
+                                HStack {
+                                    Spacer()
+                                    Text("No connected devices")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .italic()
+                                    Spacer()
+                                }
+                                .padding(.vertical, 8)
+                            }
                         }
-                        .frame(height: 90)
+                        
+                        // Available devices section
+                        VStack(alignment: .leading) {
+                            Text("Available")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 4)
+                            
+                            let availablePeers = multipeerService.discoveredPeers.filter { 
+                                $0.state == .discovered || $0.state == .invitationReceived 
+                            }
+                            
+                            if !availablePeers.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 10) {
+                                        ForEach(availablePeers) { peer in
+                                            PeerItemView(peer: peer) {
+                                                handlePeerAction(peer)
+                                            }
+                                        }
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                                .frame(height: 90)
+                            } else {
+                                HStack {
+                                    Spacer()
+                                    Text("No available devices found")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .italic()
+                                    Spacer()
+                                }
+                                .padding(.vertical, 8)
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal)
@@ -190,6 +252,7 @@ struct ContentView: View {
                     if isConnecting {
                         multipeerService.startHosting()
                         multipeerService.startBrowsing()
+                        // Always show peers list when connecting
                         showPeersList = true
                     } else {
                         multipeerService.disconnect()
@@ -252,37 +315,34 @@ struct ContentView: View {
             multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Welcome to MultipeerDemo"))
             multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Click Connect to start"))
         }
+        // Add universal connection request alert
+        .alert("Connection Request", isPresented: $showConnectionRequestAlert) {
+            Button("Accept") {
+                if let peer = currentInvitationPeer {
+                    multipeerService.acceptInvitation(from: peer, accept: true)
+                }
+                currentInvitationPeer = nil
+            }
+            Button("Decline", role: .cancel) {
+                if let peer = currentInvitationPeer {
+                    multipeerService.acceptInvitation(from: peer, accept: false)
+                }
+                currentInvitationPeer = nil
+            }
+        } message: {
+            if let peer = currentInvitationPeer {
+                Text("\(peer.peerId.displayName) wants to connect. Do you want to accept?")
+            } else {
+                Text("A device wants to connect. Do you want to accept?")
+            }
+        }
     }
     
     private func sendMessage() {
         guard !messageText.isEmpty else { return }
         
-        // Check for accept/decline commands (for macOS compatibility)
-        if messageText.lowercased().starts(with: "accept ") {
-            let peerName = messageText.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines)
-            if let peerInfo = multipeerService.discoveredPeers.first(where: { 
-                $0.peerId.displayName == peerName && $0.state == .invitationReceived 
-            }) {
-                multipeerService.acceptInvitation(from: peerInfo, accept: true)
-                multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Accepted invitation from \(peerName)"))
-            } else {
-                multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Could not find pending invitation from \(peerName)"))
-            }
-        } else if messageText.lowercased().starts(with: "decline ") {
-            let peerName = messageText.dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
-            if let peerInfo = multipeerService.discoveredPeers.first(where: { 
-                $0.peerId.displayName == peerName && $0.state == .invitationReceived
-            }) {
-                multipeerService.acceptInvitation(from: peerInfo, accept: false)
-                multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Declined invitation from \(peerName)"))
-            } else {
-                multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Could not find pending invitation from \(peerName)"))
-            }
-        } else {
-            // Regular message
-            multipeerService.sendMessage(messageText)
-        }
-        
+        // Send message directly without any platform-specific commands
+        multipeerService.sendMessage(messageText)
         messageText = ""
     }
     
@@ -303,52 +363,9 @@ struct ContentView: View {
     
     // Show accept/decline invitation dialog
     private func showAcceptInvitationDialog(from peer: MultipeerService.PeerInfo) {
-        #if canImport(UIKit) && !os(macOS)
-        // iOS implementation with UIAlertController
-        let alert = UIAlertController(
-            title: "Connection Request",
-            message: "\(peer.peerId.displayName) wants to connect. Do you want to accept?",
-            preferredStyle: .alert
-        )
-        
-        alert.addAction(UIAlertAction(title: "Accept", style: .default) { _ in
-            multipeerService.acceptInvitation(from: peer, accept: true)
-        })
-        
-        alert.addAction(UIAlertAction(title: "Decline", style: .cancel) { _ in
-            multipeerService.acceptInvitation(from: peer, accept: false)
-        })
-        
-        // Present the alert
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(alert, animated: true)
-        }
-        #else
-        // Use SwiftUI alert for macOS
-        // This is a simplified approach for the demo
-        // In a real app, you would have a more sophisticated approach
-        // Actions are defined but not used directly - macOS uses text commands instead
-        // These are here for reference but we'll comment them out to avoid warnings
-        /*
-        _ = {
-            multipeerService.acceptInvitation(from: peer, accept: true)
-        }
-        
-        _ = {
-            multipeerService.acceptInvitation(from: peer, accept: false)
-        }
-        */
-        
-        // For macOS we'll add a system message with accept/decline options
-        DispatchQueue.main.async {
-            multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Connection request from \(peer.peerId.displayName)"))
-            multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Type 'accept \(peer.peerId.displayName)' or 'decline \(peer.peerId.displayName)'"))
-            
-            // In a real app, you'd use a proper alert or dialog here
-            // This is just a workaround for this demo
-        }
-        #endif
+        // Use a unified SwiftUI approach for all platforms
+        currentInvitationPeer = peer
+        showConnectionRequestAlert = true
     }
 }
 
