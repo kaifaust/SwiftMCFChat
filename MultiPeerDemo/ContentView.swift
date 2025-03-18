@@ -15,7 +15,7 @@ import UIKit
 struct ContentView: View {
     @StateObject private var multipeerService = MultipeerService()
     @State private var messageText = ""
-    @State private var isConnecting = false
+    @State private var isSyncEnabled = true
     @State private var showInfoAlert = false
     @State private var showPeersList = false
     @State private var showSyncConflictAlert = false
@@ -49,7 +49,7 @@ struct ContentView: View {
                     Text("\(multipeerService.connectedPeers.count) connected")
                         .font(.caption)
                     
-                    if isConnecting {
+                    if isSyncEnabled {
                         Image(systemName: "network")
                             .foregroundColor(.blue)
                     }
@@ -80,7 +80,7 @@ struct ContentView: View {
             }
             
             // Devices section with Connections and Available subsections
-            if isConnecting {
+            if isSyncEnabled {
                 VStack(alignment: .leading) {
                     HStack {
                         Text("Devices")
@@ -244,27 +244,24 @@ struct ContentView: View {
                 }
             }
             
-            // Connection controls
+            // Device sync controls
             HStack {
-                Button(action: {
-                    isConnecting.toggle()
-                    
-                    if isConnecting {
-                        multipeerService.startHosting()
-                        multipeerService.startBrowsing()
-                        // Always show peers list when connecting
-                        showPeersList = true
-                    } else {
-                        multipeerService.disconnect()
-                        showPeersList = false
-                    }
-                }) {
-                    HStack {
-                        Image(systemName: isConnecting ? "network.slash" : "network")
-                        Text(isConnecting ? "Disconnect" : "Connect")
-                    }
+                HStack {
+                    Text("Sync Devices")
+                    Toggle("", isOn: $isSyncEnabled)
+                        .labelsHidden()
+                        .onChange(of: isSyncEnabled) { oldValue, newValue in
+                            if newValue {
+                                multipeerService.startHosting()
+                                multipeerService.startBrowsing()
+                                // Always show peers list when sync is enabled
+                                showPeersList = true
+                            } else {
+                                multipeerService.disconnect()
+                                showPeersList = false
+                            }
+                        }
                 }
-                .buttonStyle(.bordered)
                 
                 Spacer()
                 
@@ -313,7 +310,12 @@ struct ContentView: View {
         }
         .onAppear {
             multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Welcome to MultipeerDemo"))
-            multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Click Connect to start"))
+            multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Sync is enabled by default"))
+            
+            // Start sync automatically since it's enabled by default
+            multipeerService.startHosting()
+            multipeerService.startBrowsing()
+            showPeersList = true
             
             // Register for invitation handling
             multipeerService.pendingInvitationHandler = { peerID, invitationHandler in
