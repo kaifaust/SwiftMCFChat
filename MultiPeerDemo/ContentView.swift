@@ -22,6 +22,9 @@ struct ContentView: View {
     @State private var showClearConfirmation = false
     @State private var showConnectionRequestAlert = false
     @State private var currentInvitationPeer: MultipeerService.PeerInfo?
+    @State private var showPeerContextMenu = false
+    @State private var selectedPeer: MultipeerService.PeerInfo?
+    @State private var showForgetConfirmation = false
     
     var body: some View {
         VStack {
@@ -114,9 +117,13 @@ struct ContentView: View {
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 10) {
                                         ForEach(connectedPeers) { peer in
-                                            PeerItemView(peer: peer) {
+                                            PeerItemView(peer: peer, action: {
                                                 handlePeerAction(peer)
-                                            }
+                                            }, onContextMenu: {
+                                                selectedPeer = peer
+                                                showForgetConfirmation = true
+                                            })
+                                            .environmentObject(multipeerService)
                                         }
                                     }
                                     .padding(.vertical, 4)
@@ -150,9 +157,13 @@ struct ContentView: View {
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 10) {
                                         ForEach(availablePeers) { peer in
-                                            PeerItemView(peer: peer) {
+                                            PeerItemView(peer: peer, action: {
                                                 handlePeerAction(peer)
-                                            }
+                                            }, onContextMenu: {
+                                                selectedPeer = peer
+                                                showForgetConfirmation = true
+                                            })
+                                            .environmentObject(multipeerService)
                                         }
                                     }
                                     .padding(.vertical, 4)
@@ -333,6 +344,7 @@ struct ContentView: View {
             }
         }
         // Add universal connection request alert
+        // Connection request alert
         .alert("Connection Request", isPresented: $showConnectionRequestAlert) {
             Button("Accept") {
                 if let peer = currentInvitationPeer {
@@ -351,6 +363,31 @@ struct ContentView: View {
                 Text("\(peer.peerId.displayName) wants to connect. Do you want to accept?")
             } else {
                 Text("A device wants to connect. Do you want to accept?")
+            }
+        }
+        
+        // Forget device confirmation
+        .alert("Forget Device", isPresented: $showForgetConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            
+            Button("Forget", role: .destructive) {
+                if let peer = selectedPeer, let userId = peer.discoveryInfo?["userId"] {
+                    multipeerService.forgetDevice(userId: userId)
+                }
+                selectedPeer = nil
+            }
+            
+            Button("Forget & Block", role: .destructive) {
+                if let peer = selectedPeer, let userId = peer.discoveryInfo?["userId"] {
+                    multipeerService.forgetDevice(userId: userId, andBlock: true)
+                }
+                selectedPeer = nil
+            }
+        } message: {
+            if let peer = selectedPeer {
+                Text("Do you want to forget device \(peer.peerId.displayName)? This will remove it from known peers and auto-connect list.")
+            } else {
+                Text("Do you want to forget this device?")
             }
         }
     }
@@ -384,6 +421,8 @@ struct ContentView: View {
 struct PeerItemView: View {
     let peer: MultipeerService.PeerInfo
     let action: () -> Void
+    var onContextMenu: (() -> Void)? = nil
+    @EnvironmentObject var multipeerService: MultipeerService
     
     var body: some View {
         VStack {
@@ -419,6 +458,27 @@ struct PeerItemView: View {
         .onTapGesture {
             if isActionable(peer.state) {
                 action()
+            }
+        }
+        .contextMenu {
+            if peer.state == .connected || peer.state == .discovered {
+                if let userId = peer.discoveryInfo?["userId"] {
+                    Button(action: {
+                        if let onContextMenu = onContextMenu {
+                            onContextMenu()
+                        }
+                    }) {
+                        Label("Forget Device", systemImage: "trash")
+                    }
+                    
+                    Button(action: {
+                        if let userId = peer.discoveryInfo?["userId"] {
+                            multipeerService.blockUser(userId: userId)
+                        }
+                    }) {
+                        Label("Block Device", systemImage: "nosign")
+                    }
+                }
             }
         }
     }

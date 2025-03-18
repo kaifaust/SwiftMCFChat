@@ -69,6 +69,9 @@ class MultipeerService: NSObject, ObservableObject {
         static let messages = "MultipeerDemo.messages"
         static let peerID = "MultipeerDemo.peerID"
         static let peerDisplayName = "MultipeerDemo.peerDisplayName"
+        static let knownPeers = "MultipeerDemo.knownPeers"
+        static let blockedPeers = "MultipeerDemo.blockedPeers"
+        static let autoConnectPeers = "MultipeerDemo.autoConnectPeers"
     }
     
     // Service type should be a unique identifier, following Bonjour naming conventions:
@@ -216,8 +219,11 @@ class MultipeerService: NSObject, ObservableObject {
         advertiser.delegate = self
         browser.delegate = self
         
-        // Load saved messages
+        // Load saved data
         loadMessages()
+        loadKnownPeers()
+        loadBlockedPeers()
+        loadAutoConnectPeers()
         
         // Add message about initialized service
         DispatchQueue.main.async {
@@ -325,6 +331,24 @@ class MultipeerService: NSObject, ObservableObject {
     // Delegate for handling invitations proactively
     var pendingInvitationHandler: ((MCPeerID, (Bool, MCSession?) -> Void) -> Void)?
     
+    // Store known and blocked peers
+    @Published private(set) var knownPeers: [KnownPeerInfo] = []
+    @Published private(set) var blockedPeers: Set<String> = []
+    @Published private(set) var autoConnectPeers: Set<String> = []
+    
+    // Structure to track known peer information
+    struct KnownPeerInfo: Identifiable, Codable, Equatable {
+        // Using var instead of let for id to allow it to be decoded
+        var id: UUID = UUID()
+        let displayName: String
+        let userId: String
+        let lastSeen: Date
+        
+        static func == (lhs: KnownPeerInfo, rhs: KnownPeerInfo) -> Bool {
+            return lhs.userId == rhs.userId
+        }
+    }
+    
     // Helper to update peer state in the discoveredPeers array
     private func updatePeerState(_ peerId: MCPeerID, to state: PeerState) {
         DispatchQueue.main.async {
@@ -394,7 +418,7 @@ class MultipeerService: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Message Persistence and Syncing
+    // MARK: - Persistence and Syncing
     
     // Save messages to UserDefaults
     private func saveMessages() {
@@ -427,6 +451,103 @@ class MultipeerService: NSObject, ObservableObject {
         } catch {
             print("❌ Failed to load messages: \(error.localizedDescription)")
             isInitialLoad = false
+        }
+    }
+    
+    // Save known peers to UserDefaults
+    private func saveKnownPeers() {
+        do {
+            let data = try JSONEncoder().encode(knownPeers)
+            UserDefaults.standard.set(data, forKey: UserDefaultsKeys.knownPeers)
+            print("💾 Saved \(knownPeers.count) known peers to UserDefaults")
+        } catch {
+            print("❌ Failed to save known peers: \(error.localizedDescription)")
+        }
+    }
+    
+    // Load known peers from UserDefaults
+    private func loadKnownPeers() {
+        guard let data = UserDefaults.standard.data(forKey: UserDefaultsKeys.knownPeers) else {
+            print("ℹ️ No known peers found in UserDefaults")
+            return
+        }
+        
+        do {
+            let loadedPeers = try JSONDecoder().decode([KnownPeerInfo].self, from: data)
+            DispatchQueue.main.async {
+                self.knownPeers = loadedPeers
+                print("📂 Loaded \(loadedPeers.count) known peers from UserDefaults")
+            }
+        } catch {
+            print("❌ Failed to load known peers: \(error.localizedDescription)")
+        }
+    }
+    
+    // Save blocked peers to UserDefaults
+    private func saveBlockedPeers() {
+        // Convert Set<String> to Array for encoding
+        let blockedArray = Array(blockedPeers)
+        UserDefaults.standard.set(blockedArray, forKey: UserDefaultsKeys.blockedPeers)
+        print("💾 Saved \(blockedPeers.count) blocked peers to UserDefaults")
+    }
+    
+    // Load blocked peers from UserDefaults
+    private func loadBlockedPeers() {
+        guard let blockedArray = UserDefaults.standard.array(forKey: UserDefaultsKeys.blockedPeers) as? [String] else {
+            print("ℹ️ No blocked peers found in UserDefaults")
+            return
+        }
+        
+        DispatchQueue.main.async {
+            self.blockedPeers = Set(blockedArray)
+            print("📂 Loaded \(self.blockedPeers.count) blocked peers from UserDefaults")
+        }
+    }
+    
+    // Save auto-connect peers to UserDefaults
+    private func saveAutoConnectPeers() {
+        // Convert Set<String> to Array for encoding
+        let autoConnectArray = Array(autoConnectPeers)
+        UserDefaults.standard.set(autoConnectArray, forKey: UserDefaultsKeys.autoConnectPeers)
+        print("💾 Saved \(autoConnectPeers.count) auto-connect peers to UserDefaults")
+    }
+    
+    // Load auto-connect peers from UserDefaults
+    private func loadAutoConnectPeers() {
+        guard let autoConnectArray = UserDefaults.standard.array(forKey: UserDefaultsKeys.autoConnectPeers) as? [String] else {
+            print("ℹ️ No auto-connect peers found in UserDefaults")
+            return
+        }
+        
+        DispatchQueue.main.async {
+            self.autoConnectPeers = Set(autoConnectArray)
+            print("📂 Loaded \(self.autoConnectPeers.count) auto-connect peers from UserDefaults")
+        }
+    }
+    
+    // Update or add a known peer
+    private func updateKnownPeer(displayName: String, userId: String) {
+        DispatchQueue.main.async {
+            // Check if this peer is already known
+            if let index = self.knownPeers.firstIndex(where: { $0.userId == userId }) {
+                // Update existing entry with new display name and timestamp
+                let updatedPeer = KnownPeerInfo(
+                    displayName: displayName,
+                    userId: userId,
+                    lastSeen: Date()
+                )
+                self.knownPeers[index] = updatedPeer
+            } else {
+                // Add new known peer
+                let newPeer = KnownPeerInfo(
+                    displayName: displayName,
+                    userId: userId,
+                    lastSeen: Date()
+                )
+                self.knownPeers.append(newPeer)
+            }
+            
+            self.saveKnownPeers()
         }
     }
     
@@ -468,6 +589,186 @@ class MultipeerService: NSObject, ObservableObject {
         pendingInvitations.removeAll()
     }
     
+    // MARK: - Peer Management Functions
+    
+    /// Add a peer to the auto-connect list
+    func setAutoConnect(forUserId userId: String, enabled: Bool) {
+        DispatchQueue.main.async {
+            if enabled {
+                self.autoConnectPeers.insert(userId)
+                print("✅ Added \(userId) to auto-connect list")
+                self.messages.append(ChatMessage.systemMessage("Added peer to auto-connect list"))
+            } else {
+                self.autoConnectPeers.remove(userId)
+                print("🚫 Removed \(userId) from auto-connect list")
+                self.messages.append(ChatMessage.systemMessage("Removed peer from auto-connect list"))
+            }
+            
+            self.saveAutoConnectPeers()
+        }
+    }
+    
+    /// Block a user by userId
+    func blockUser(userId: String) {
+        DispatchQueue.main.async {
+            self.blockedPeers.insert(userId)
+            print("🚫 Blocked user: \(userId)")
+            self.messages.append(ChatMessage.systemMessage("Blocked peer"))
+            
+            // Remove from auto-connect list if present
+            self.autoConnectPeers.remove(userId)
+            
+            // Disconnect from any connected peers with this userId
+            self.disconnectBlockedUser(userId: userId)
+            
+            self.saveBlockedPeers()
+            self.saveAutoConnectPeers()
+        }
+    }
+    
+    /// Unblock a user by userId
+    func unblockUser(userId: String) {
+        DispatchQueue.main.async {
+            self.blockedPeers.remove(userId)
+            print("✅ Unblocked user: \(userId)")
+            self.messages.append(ChatMessage.systemMessage("Unblocked peer"))
+            
+            self.saveBlockedPeers()
+        }
+    }
+    
+    /// Check if a user is blocked
+    func isUserBlocked(_ userId: String) -> Bool {
+        return blockedPeers.contains(userId)
+    }
+    
+    /// Check if we should auto-connect to a user
+    func shouldAutoConnect(to userId: String) -> Bool {
+        return autoConnectPeers.contains(userId) && !isUserBlocked(userId)
+    }
+    
+    /// Forget a device - remove from known peers and auto-connect, and optionally block
+    func forgetDevice(userId: String, andBlock: Bool = false) {
+        print("🧹 Forgetting device with userId: \(userId)")
+        
+        // Send forget request to connected peers if possible
+        // This will attempt to have the other device also forget us (best-effort)
+        sendForgetRequest(forUserId: userId)
+        
+        DispatchQueue.main.async {
+            // Remove from known peers
+            self.knownPeers.removeAll { $0.userId == userId }
+            
+            // Remove from auto-connect list
+            self.autoConnectPeers.remove(userId)
+            
+            // Always disconnect active connections when forgetting
+            self.disconnectUser(userId: userId)
+            
+            // Block if requested
+            if andBlock {
+                self.blockedPeers.insert(userId)
+                // Only remove from discovered peers if we're blocking
+                self.discoveredPeers.removeAll(where: { 
+                    $0.discoveryInfo?["userId"] == userId 
+                })
+            }
+            
+            // Save changes
+            self.saveKnownPeers()
+            self.saveAutoConnectPeers()
+            self.saveBlockedPeers()
+            
+            self.messages.append(ChatMessage.systemMessage(andBlock ? "Forgot and blocked device" : "Forgot device"))
+        }
+    }
+    
+    /// Disconnect from a specific user by ID
+    private func disconnectUser(userId: String) {
+        // Find all connected peers with this userId
+        let peersToDisconnect = discoveredPeers.filter { 
+            $0.state == .connected && 
+            $0.discoveryInfo?["userId"] == userId 
+        }.map { $0.peerId }
+        
+        for peerId in peersToDisconnect {
+            // We can't directly disconnect a specific peer in MCSession
+            // So we'll need to create a new session without this peer
+            print("❌ Disconnecting from user \(userId) on device \(peerId.displayName)")
+        }
+        
+        // If we need to disconnect from specific peers but keep others connected,
+        // we'd need to recreate the session and only invite the peers we want to keep
+        if !peersToDisconnect.isEmpty {
+            print("🔄 Recreating session to remove specific peers")
+            
+            // Store current browsing and hosting states
+            let wasBrowsing = isBrowsing
+            let wasHosting = isHosting
+            
+            // Stop current browsing and advertising
+            if wasBrowsing {
+                stopBrowsing()
+            }
+            if wasHosting {
+                stopHosting()
+            }
+            
+            // Disconnect current session
+            session.disconnect() // This will disconnect all peers
+            
+            // Create a new session
+            session = MCSession(
+                peer: myPeerId,
+                securityIdentity: nil,
+                encryptionPreference: .required
+            )
+            session.delegate = self
+            
+            // Update connection state for all peers
+            DispatchQueue.main.async {
+                for i in 0..<self.discoveredPeers.count {
+                    if self.discoveredPeers[i].state == .connected {
+                        self.discoveredPeers[i].state = .disconnected
+                    }
+                }
+                self.connectedPeers = []
+            }
+            
+            // Restart browsing and advertising if they were active
+            if wasBrowsing {
+                startBrowsing()
+            }
+            if wasHosting {
+                startHosting()
+            }
+        }
+    }
+    
+    /// Special case for disconnecting blocked users
+    private func disconnectBlockedUser(userId: String) {
+        disconnectUser(userId: userId)
+    }
+    
+    /// Send a request to other devices to forget this device (best effort)
+    private func sendForgetRequest(forUserId userId: String) {
+        let forgetRequest = ForgetDeviceRequest(userId: userId)
+        
+        do {
+            let forgetData = try JSONEncoder().encode(forgetRequest)
+            try session.send(forgetData, toPeers: session.connectedPeers, with: .reliable)
+            print("📤 Sent forget request for userId \(userId) to \(session.connectedPeers.count) peers")
+        } catch {
+            print("❌ Failed to send forget request: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Message type for forget device requests
+    struct ForgetDeviceRequest: Codable {
+        var type = "forget_device"
+        let userId: String
+    }
+    
     // Clear all messages
     func clearAllMessages() {
         print("🧹 Clearing all messages")
@@ -507,6 +808,12 @@ extension MultipeerService: MCSessionDelegate {
                 // Update peer state in discovered peers list
                 self.updatePeerState(peerID, to: .connected)
                 
+                // Store peer as known if we have their userId
+                if let discoveryInfo = self.discoveredPeers.first(where: { $0.peerId == peerID })?.discoveryInfo,
+                   let userId = discoveryInfo["userId"] {
+                    self.updateKnownPeer(displayName: peerID.displayName, userId: userId)
+                }
+                
                 // Sync messages with the newly connected peer
                 self.syncMessages(with: peerID)
                 
@@ -542,7 +849,19 @@ extension MultipeerService: MCSessionDelegate {
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         print("📥 Received data from: \(peerID.displayName) (\(data.count) bytes)")
         
-        // 1. Try to decode as a SyncDecision first (highest priority)
+        // 1. Try to decode as a ForgetDeviceRequest (highest priority)
+        do {
+            let forgetRequest = try JSONDecoder().decode(ForgetDeviceRequest.self, from: data)
+            if forgetRequest.type == "forget_device" {
+                print("🧹 Received forget device request for userId: \(forgetRequest.userId)")
+                handleForgetDeviceRequest(userId: forgetRequest.userId, fromPeer: peerID)
+                return
+            }
+        } catch {
+            // Not a forget device request, continue
+        }
+        
+        // 2. Try to decode as a SyncDecision 
         do {
             let syncDecision = try JSONDecoder().decode(SyncDecision.self, from: data)
             if syncDecision.type == "sync_decision" {
@@ -554,7 +873,7 @@ extension MultipeerService: MCSessionDelegate {
             // Not a sync decision, continue
         }
         
-        // 2. Try to decode as a SyncMessage
+        // 3. Try to decode as a SyncMessage
         do {
             let syncMessage = try JSONDecoder().decode(SyncMessage.self, from: data)
             if syncMessage.type == "sync" {
@@ -566,7 +885,7 @@ extension MultipeerService: MCSessionDelegate {
             // Not a sync message, continue with regular message handling
         }
         
-        // 3. Try to decode the data as a regular ChatMessage
+        // 4. Try to decode the data as a regular ChatMessage
         do {
             let receivedMessage = try JSONDecoder().decode(ChatMessage.self, from: data)
             print("📩 Message content: \(receivedMessage.content) from \(receivedMessage.senderName)")
@@ -585,6 +904,74 @@ extension MultipeerService: MCSessionDelegate {
             DispatchQueue.main.async {
                 self.messages.append(ChatMessage.systemMessage("Received unreadable message from \(peerID.displayName)"))
             }
+        }
+    }
+    
+    /// Handle a request from another device to forget a user ID
+    private func handleForgetDeviceRequest(userId: String, fromPeer peerID: MCPeerID) {
+        print("🔄 Processing forget device request for userId: \(userId) from \(peerID.displayName)")
+        
+        // Get the current state
+        let wasBrowsing = isBrowsing
+        let wasHosting = isHosting
+        
+        // First, break the active connection (this is needed for proper rediscovery)
+        if session.connectedPeers.contains(peerID) {
+            // Need to recreate the session to disconnect this specific peer
+            
+            // Stop browsing and advertising temporarily
+            if wasBrowsing {
+                stopBrowsing()
+            }
+            if wasHosting {
+                stopHosting()
+            }
+            
+            // Disconnect the session
+            session.disconnect()
+            
+            // Create a new session
+            session = MCSession(
+                peer: myPeerId,
+                securityIdentity: nil,
+                encryptionPreference: .required
+            )
+            session.delegate = self
+            
+            // Update connection states
+            DispatchQueue.main.async {
+                // Update all connected peers to disconnected
+                for i in 0..<self.discoveredPeers.count {
+                    if self.discoveredPeers[i].state == .connected {
+                        self.discoveredPeers[i].state = .disconnected
+                    }
+                }
+                self.connectedPeers = []
+            }
+            
+            // Restart browsing and advertising
+            if wasBrowsing {
+                startBrowsing()
+            }
+            if wasHosting {
+                startHosting()
+            }
+        }
+        
+        DispatchQueue.main.async {
+            // Remove from known peers
+            self.knownPeers.removeAll { $0.userId == userId }
+            
+            // Remove from auto-connect
+            self.autoConnectPeers.remove(userId)
+            
+            // Don't block - that's a user preference
+            
+            // Save changes
+            self.saveKnownPeers()
+            self.saveAutoConnectPeers()
+            
+            self.messages.append(ChatMessage.systemMessage("Removed peer from known devices at their request"))
         }
     }
     
@@ -865,6 +1252,16 @@ extension MultipeerService: MCNearbyServiceAdvertiserDelegate {
             }
         }
         
+        // Check if this user is blocked
+        if let userId = senderInfo["userId"], isUserBlocked(userId) {
+            print("🚫 Declining invitation from blocked user: \(peerID.displayName)")
+            DispatchQueue.main.async {
+                self.messages.append(ChatMessage.systemMessage("Declined invitation from blocked user \(peerID.displayName)"))
+            }
+            invitationHandler(false, nil)
+            return
+        }
+        
         // Only accept if not already connected
         guard !session.connectedPeers.contains(peerID) else {
             print("⚠️ Already connected to peer: \(peerID.displayName), declining invitation")
@@ -872,6 +1269,27 @@ extension MultipeerService: MCNearbyServiceAdvertiserDelegate {
                 self.messages.append(ChatMessage.systemMessage("Declining duplicate invitation from \(peerID.displayName)"))
             }
             invitationHandler(false, nil)
+            return
+        }
+        
+        // Check if this is a known peer with auto-connect enabled
+        let shouldAutoAccept = senderInfo["userId"].flatMap { self.shouldAutoConnect(to: $0) } ?? false
+        
+        if shouldAutoAccept {
+            print("✅ Auto-accepting invitation from known peer: \(peerID.displayName)")
+            DispatchQueue.main.async {
+                self.messages.append(ChatMessage.systemMessage("Auto-accepting invitation from known peer \(peerID.displayName)"))
+            }
+            
+            // Auto-accept the invitation
+            updatePeerState(peerID, to: .connecting)
+            invitationHandler(true, session)
+            
+            // Update known peer's last seen time
+            if let userId = senderInfo["userId"] {
+                updateKnownPeer(displayName: peerID.displayName, userId: userId)
+            }
+            
             return
         }
         
@@ -921,6 +1339,15 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         print("🔍 Found peer: \(peerID.displayName), info: \(info?.description ?? "none")")
         
+        // Get userId from discovery info if available
+        let userId = info?["userId"]
+        
+        // Check if this peer is blocked
+        if let userId = userId, isUserBlocked(userId) {
+            print("🚫 Ignoring blocked peer: \(peerID.displayName) with userId \(userId)")
+            return
+        }
+        
         // Only add to discoveredPeers if not already in the list and not connected
         DispatchQueue.main.async {
             // Check if already connected
@@ -945,6 +1372,14 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                 ))
                 
                 self.messages.append(ChatMessage.systemMessage("Discovered new peer \(peerID.displayName)"))
+                
+                // If this is a known peer that we should auto-connect to, invite them automatically
+                if let userId = userId, self.shouldAutoConnect(to: userId) {
+                    let peerInfo = PeerInfo(peerId: peerID, state: .discovered, discoveryInfo: info)
+                    print("🔄 Auto-connecting to previously connected peer: \(peerID.displayName)")
+                    self.messages.append(ChatMessage.systemMessage("Auto-connecting to known peer \(peerID.displayName)"))
+                    self.invitePeer(peerInfo)
+                }
             }
         }
     }
