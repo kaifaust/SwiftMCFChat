@@ -254,10 +254,8 @@ class MultipeerService: NSObject, ObservableObject {
     
     // Accept a pending invitation
     func acceptInvitation(from peerInfo: PeerInfo, accept: Bool) {
-        guard discoveredPeers.contains(where: { $0.peerId == peerInfo.peerId }) else {
-            print("⚠️ Cannot find peer to accept/decline invitation: \(peerInfo.peerId.displayName)")
-            return
-        }
+        // The peer might not be in discoveredPeers when accepting from a proactive alert
+        // so we'll proceed if there's a pending invitation handler
         
         // Check if invitation handler exists for this peer
         if let handler = pendingInvitations[peerInfo.peerId] {
@@ -293,11 +291,20 @@ class MultipeerService: NSObject, ObservableObject {
     // Store for pending invitations (peerId -> handler)
     private var pendingInvitations: [MCPeerID: (Bool, MCSession?) -> Void] = [:]
     
+    // Delegate for handling invitations proactively
+    var pendingInvitationHandler: ((MCPeerID, (Bool, MCSession?) -> Void) -> Void)?
+    
     // Helper to update peer state in the discoveredPeers array
     private func updatePeerState(_ peerId: MCPeerID, to state: PeerState) {
         DispatchQueue.main.async {
             if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerId }) {
                 self.discoveredPeers[index].state = state
+            } else {
+                // Add the peer if it doesn't exist yet (for proactive approaches)
+                self.discoveredPeers.append(PeerInfo(
+                    peerId: peerId,
+                    state: state
+                ))
             }
         }
     }
@@ -843,18 +850,20 @@ extension MultipeerService: MCNearbyServiceAdvertiserDelegate {
         // Check if this peer is already in our list
         DispatchQueue.main.async {
             if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
-                // Update existing peer
-                self.discoveredPeers[index].state = .invitationReceived
+                // Update existing peer - keep as discovered so it appears in Available list
+                self.discoveredPeers[index].state = .discovered
             } else {
-                // Add new peer with invitation received state
+                // Add new peer with discovered state
                 self.discoveredPeers.append(PeerInfo(
                     peerId: peerID,
-                    state: .invitationReceived
+                    state: .discovered
                 ))
             }
             
             self.messages.append(ChatMessage.systemMessage("Received invitation from \(peerID.displayName)"))
-            self.messages.append(ChatMessage.systemMessage("Waiting for you to accept or decline"))
+            
+            // Notify delegate to immediately show connection request
+            self.pendingInvitationHandler?(peerID, invitationHandler)
         }
     }
     

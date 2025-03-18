@@ -143,7 +143,7 @@ struct ContentView: View {
                                 .padding(.top, 4)
                             
                             let availablePeers = multipeerService.discoveredPeers.filter { 
-                                $0.state == .discovered || $0.state == .invitationReceived 
+                                $0.state == .discovered 
                             }
                             
                             if !availablePeers.isEmpty {
@@ -314,6 +314,21 @@ struct ContentView: View {
         .onAppear {
             multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Welcome to MultipeerDemo"))
             multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Click Connect to start"))
+            
+            // Register for invitation handling
+            multipeerService.pendingInvitationHandler = { peerID, invitationHandler in
+                // Find or create a PeerInfo for this peer
+                let peerInfo: MultipeerService.PeerInfo
+                if let existing = multipeerService.discoveredPeers.first(where: { $0.peerId == peerID }) {
+                    peerInfo = existing
+                } else {
+                    peerInfo = MultipeerService.PeerInfo(peerId: peerID, state: .discovered)
+                }
+                
+                // Show the connection request dialog immediately
+                currentInvitationPeer = peerInfo
+                showConnectionRequestAlert = true
+            }
         }
         // Add universal connection request alert
         .alert("Connection Request", isPresented: $showConnectionRequestAlert) {
@@ -348,17 +363,11 @@ struct ContentView: View {
     
     // Handle peer action based on its current state
     private func handlePeerAction(_ peer: MultipeerService.PeerInfo) {
-        switch peer.state {
-        case .discovered:
+        if peer.state == .discovered {
             // Invite peer
             multipeerService.invitePeer(peer)
-        case .invitationReceived:
-            // Show dialog to accept/decline invitation
-            showAcceptInvitationDialog(from: peer)
-        default:
-            // Other states don't need any action or are handled automatically
-            break
         }
+        // All other states don't need manual action or are handled automatically
     }
     
     // Show accept/decline invitation dialog
@@ -414,12 +423,7 @@ struct PeerItemView: View {
     
     // Determine if peer state is actionable (can be tapped)
     private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
-        switch state {
-        case .discovered, .invitationReceived:
-            return true
-        default:
-            return false
-        }
+        return state == .discovered
     }
     
     // Get appropriate icon for peer state
@@ -435,8 +439,8 @@ struct PeerItemView: View {
             return "x.circle"
         case .invitationSent:
             return "envelope"
-        case .invitationReceived:
-            return "envelope.badge"
+        default:
+            return "person.crop.circle.badge.questionmark"
         }
     }
     
@@ -453,8 +457,8 @@ struct PeerItemView: View {
             return .red
         case .invitationSent:
             return .purple
-        case .invitationReceived:
-            return .pink
+        default:
+            return .gray
         }
     }
 }
