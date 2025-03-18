@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var showInfoAlert = false
     @State private var showPeersList = false
     @State private var showSyncConflictAlert = false
+    @State private var showClearConfirmation = false
     
     var body: some View {
         VStack {
@@ -28,6 +29,14 @@ struct ContentView: View {
                     .font(.headline)
                 
                 Spacer()
+                
+                // Clear history button
+                Button(action: {
+                    showClearConfirmation = true
+                }) {
+                    Image(systemName: "trash")
+                        .foregroundColor(.red)
+                }
                 
                 // Connection status with more details
                 HStack {
@@ -57,6 +66,16 @@ struct ContentView: View {
                 }
             }
             .padding()
+            
+            // Clear history confirmation alert
+            .alert("Clear Chat History", isPresented: $showClearConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Clear", role: .destructive) {
+                    multipeerService.clearAllMessages()
+                }
+            } message: {
+                Text("Are you sure you want to clear all messages? This action cannot be undone.")
+            }
             
             // Nearby devices section
             if isConnecting && !multipeerService.discoveredPeers.isEmpty {

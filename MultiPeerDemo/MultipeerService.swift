@@ -400,6 +400,15 @@ class MultipeerService: NSObject, ObservableObject {
         // Clear pending invitations
         pendingInvitations.removeAll()
     }
+    
+    // Clear all messages
+    func clearAllMessages() {
+        print("🧹 Clearing all messages")
+        DispatchQueue.main.async {
+            // Keep only a new system message
+            self.messages = [ChatMessage.systemMessage("Chat history cleared")]
+        }
+    }
 }
 
 // MARK: - MCSessionDelegate
@@ -529,7 +538,18 @@ extension MultipeerService: MCSessionDelegate {
             } else {
                 // They chose to keep their history, so we use their messages
                 print("ℹ️ Remote device kept their history, adopting it")
-                self.messages = remoteMessages
+                
+                // Keep only our system messages
+                let ourSystemMessages = self.messages.filter { $0.isSystemMessage }
+                
+                // Get user messages from remote
+                let remoteUserMessages = remoteMessages.filter { !$0.isSystemMessage }
+                
+                // Combine and sort
+                self.messages = ourSystemMessages + remoteUserMessages
+                self.messages.sort(by: { $0.timestamp < $1.timestamp })
+                
+                // Add info message
                 self.messages.append(ChatMessage.systemMessage("Adopted message history from \(peerID.displayName)"))
             }
             
@@ -544,14 +564,18 @@ extension MultipeerService: MCSessionDelegate {
         print("🔄 Received message sync from \(peerID.displayName) with \(syncedMessages.count) messages")
         
         DispatchQueue.main.async {
+            // Filter out system messages for conflict detection
+            let localUserMessages = self.messages.filter { !$0.isSystemMessage }
+            let remoteUserMessages = syncedMessages.filter { !$0.isSystemMessage }
+            
             // If our history and their history are different in significant ways,
             // let the user decide which to keep
-            let localOnlyMessages = self.messages.filter { localMsg in
-                !syncedMessages.contains { $0.id == localMsg.id }
+            let localOnlyMessages = localUserMessages.filter { localMsg in
+                !remoteUserMessages.contains { $0.id == localMsg.id }
             }
             
-            let remoteOnlyMessages = syncedMessages.filter { remoteMsg in
-                !self.messages.contains { $0.id == remoteMsg.id }
+            let remoteOnlyMessages = remoteUserMessages.filter { remoteMsg in
+                !localUserMessages.contains { $0.id == remoteMsg.id }
             }
             
             // If there are differences in both directions, we have a potential conflict
@@ -577,10 +601,12 @@ extension MultipeerService: MCSessionDelegate {
     
     // Merge messages from another peer without conflict resolution
     private func mergeMessages(_ syncedMessages: [ChatMessage], fromPeer peerID: MCPeerID) {
+        // Only merge non-system messages
+        let remoteUserMessages = syncedMessages.filter { !$0.isSystemMessage }
         var newMessages = [ChatMessage]()
         
         // Add messages we don't already have
-        for syncedMessage in syncedMessages {
+        for syncedMessage in remoteUserMessages {
             if !self.messages.contains(where: { $0.id == syncedMessage.id }) {
                 newMessages.append(syncedMessage)
             }
@@ -639,10 +665,20 @@ extension MultipeerService: MCSessionDelegate {
     // Apply the sync decision locally
     private func applySyncDecision(useRemote: Bool, peerID: MCPeerID, remoteMessages: [ChatMessage]) {
         if useRemote {
-            // Replace our message history with the remote one
+            // Replace our user messages with the remote ones, but keep our system messages
             print("🔄 Using remote message history from \(peerID.displayName)")
             DispatchQueue.main.async {
-                self.messages = remoteMessages
+                // Keep only our system messages
+                let ourSystemMessages = self.messages.filter { $0.isSystemMessage }
+                
+                // Get user messages from remote
+                let remoteUserMessages = remoteMessages.filter { !$0.isSystemMessage }
+                
+                // Combine and sort
+                self.messages = ourSystemMessages + remoteUserMessages
+                self.messages.sort(by: { $0.timestamp < $1.timestamp })
+                
+                // Add info message
                 self.messages.append(ChatMessage.systemMessage("Adopted message history from \(peerID.displayName)"))
             }
         } else {
