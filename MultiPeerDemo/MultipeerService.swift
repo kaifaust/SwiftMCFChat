@@ -46,12 +46,37 @@ class MultipeerService: NSObject, ObservableObject {
     // Track connected peers
     @Published var connectedPeers: [MCPeerID] = []
     
+    // Track discovered peers and their states
+    @Published var discoveredPeers: [PeerInfo] = []
+    
     // Messages array
     @Published var messages: [String] = []
     
     // Track if we're currently hosting and browsing
     @Published var isHosting = false
     @Published var isBrowsing = false
+    
+    // Struct to track peer state information
+    struct PeerInfo: Identifiable, Equatable {
+        let id: UUID = UUID()
+        let peerId: MCPeerID
+        var state: PeerState
+        var discoveryInfo: [String: String]?
+        
+        static func == (lhs: PeerInfo, rhs: PeerInfo) -> Bool {
+            return lhs.peerId == rhs.peerId
+        }
+    }
+    
+    // Enum to track peer states
+    enum PeerState: String {
+        case discovered = "Discovered"
+        case connecting = "Connecting..."
+        case connected = "Connected"
+        case disconnected = "Disconnected"
+        case invitationSent = "Invitation Sent"
+        case invitationReceived = "Invitation Received"
+    }
     
     // MARK: - Initialization
     
@@ -128,6 +153,75 @@ class MultipeerService: NSObject, ObservableObject {
         isBrowsing = false
         DispatchQueue.main.async {
             self.messages.append("System: Stopped looking for peers")
+            
+            // Clear discovered peers list when stopping browsing
+            self.discoveredPeers.removeAll(where: { $0.state == .discovered })
+        }
+    }
+    
+    // Invite a specific peer to connect
+    func invitePeer(_ peerInfo: PeerInfo) {
+        print("📨 Inviting peer: \(peerInfo.peerId.displayName)")
+        
+        // Update peer state
+        updatePeerState(peerInfo.peerId, to: .invitationSent)
+        
+        DispatchQueue.main.async {
+            self.messages.append("System: Sending invitation to \(peerInfo.peerId.displayName)")
+        }
+        
+        // Include discovery info when inviting
+        let contextInfo = "MultiPeerDemo invitation".data(using: .utf8)
+        browser.invitePeer(peerInfo.peerId, to: session, withContext: contextInfo, timeout: 60)
+    }
+    
+    // Accept a pending invitation
+    func acceptInvitation(from peerInfo: PeerInfo, accept: Bool) {
+        guard let index = discoveredPeers.firstIndex(where: { $0.peerId == peerInfo.peerId }) else {
+            print("⚠️ Cannot find peer to accept/decline invitation: \(peerInfo.peerId.displayName)")
+            return
+        }
+        
+        // Check if invitation handler exists for this peer
+        if let handler = pendingInvitations[peerInfo.peerId] {
+            if accept {
+                print("✅ Accepting invitation from: \(peerInfo.peerId.displayName)")
+                updatePeerState(peerInfo.peerId, to: .connecting)
+                
+                DispatchQueue.main.async {
+                    self.messages.append("System: Accepting invitation from \(peerInfo.peerId.displayName)")
+                }
+                
+                // Accept the invitation
+                handler(true, session)
+            } else {
+                print("❌ Declining invitation from: \(peerInfo.peerId.displayName)")
+                updatePeerState(peerInfo.peerId, to: .discovered)
+                
+                DispatchQueue.main.async {
+                    self.messages.append("System: Declining invitation from \(peerInfo.peerId.displayName)")
+                }
+                
+                // Decline the invitation
+                handler(false, nil)
+            }
+            
+            // Remove the handler once used
+            pendingInvitations.removeValue(forKey: peerInfo.peerId)
+        } else {
+            print("⚠️ No pending invitation from: \(peerInfo.peerId.displayName)")
+        }
+    }
+    
+    // Store for pending invitations (peerId -> handler)
+    private var pendingInvitations: [MCPeerID: (Bool, MCSession?) -> Void] = [:]
+    
+    // Helper to update peer state in the discoveredPeers array
+    private func updatePeerState(_ peerId: MCPeerID, to state: PeerState) {
+        DispatchQueue.main.async {
+            if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerId }) {
+                self.discoveredPeers[index].state = state
+            }
         }
     }
     
@@ -166,9 +260,15 @@ class MultipeerService: NSObject, ObservableObject {
         session.disconnect()
         stopHosting()
         stopBrowsing()
+        
+        // Clear all discovered peers
         DispatchQueue.main.async {
+            self.discoveredPeers.removeAll()
             self.messages.append("System: Disconnected from all peers")
         }
+        
+        // Clear pending invitations
+        pendingInvitations.removeAll()
     }
 }
 
@@ -189,6 +289,9 @@ extension MultipeerService: MCSessionDelegate {
                 print("🔢 Total connected peers: \(session.connectedPeers.count)")
                 print("📋 Connected peers list: \(session.connectedPeers.map { $0.displayName }.joined(separator: ", "))")
                 
+                // Update peer state in discovered peers list
+                self.updatePeerState(peerID, to: .connected)
+                
                 // If we reach maximum peers, consider stopping advertising/browsing
                 if session.connectedPeers.count >= 7 { // Max is 8 including local peer
                     print("⚠️ Approaching maximum peer limit (8)")
@@ -197,9 +300,20 @@ extension MultipeerService: MCSessionDelegate {
             case .connecting:
                 print("⏳ Connecting to: \(peerID.displayName)")
                 self.messages.append("System: Connecting to \(peerID.displayName)...")
+                
+                // Update peer state in discovered peers list
+                self.updatePeerState(peerID, to: .connecting)
+                
             case .notConnected:
                 print("❌ Disconnected from: \(peerID.displayName)")
                 self.messages.append("System: Disconnected from \(peerID.displayName)")
+                
+                // If the peer exists in our discovered list, update its state,
+                // otherwise it might have been removed already
+                if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
+                    self.discoveredPeers[index].state = .disconnected
+                }
+                
             @unknown default:
                 print("❓ Unknown state (\(state.rawValue)) for: \(peerID.displayName)")
                 self.messages.append("System: Unknown connection state with \(peerID.displayName)")
@@ -283,13 +397,25 @@ extension MultipeerService: MCNearbyServiceAdvertiserDelegate {
             return
         }
         
-        // Auto-accept connection requests
-        print("✅ Auto-accepting invitation from: \(peerID.displayName)")
+        // Store the invitation handler for later use when user accepts/declines
+        pendingInvitations[peerID] = invitationHandler
+        
+        // Check if this peer is already in our list
         DispatchQueue.main.async {
+            if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
+                // Update existing peer
+                self.discoveredPeers[index].state = .invitationReceived
+            } else {
+                // Add new peer with invitation received state
+                self.discoveredPeers.append(PeerInfo(
+                    peerId: peerID,
+                    state: .invitationReceived
+                ))
+            }
+            
             self.messages.append("System: Received invitation from \(peerID.displayName)")
-            self.messages.append("System: Auto-accepting connection")
+            self.messages.append("System: Waiting for you to accept or decline")
         }
-        invitationHandler(true, session)
     }
     
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
@@ -314,28 +440,51 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         print("🔍 Found peer: \(peerID.displayName), info: \(info?.description ?? "none")")
         
-        // Only invite if not already connected
-        guard !session.connectedPeers.contains(peerID) else {
-            print("⚠️ Peer already connected: \(peerID.displayName)")
-            return
-        }
-        
-        // Auto-invite discovered peers
-        print("📨 Inviting peer: \(peerID.displayName)")
+        // Only add to discoveredPeers if not already in the list and not connected
         DispatchQueue.main.async {
-            self.messages.append("System: Found peer \(peerID.displayName)")
-            self.messages.append("System: Sending invitation to \(peerID.displayName)")
+            // Check if already connected
+            if self.session.connectedPeers.contains(peerID) {
+                print("⚠️ Peer already connected: \(peerID.displayName)")
+                return
+            }
+            
+            // Check if already in discovered list
+            if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
+                // Update peer info if it has changed state
+                if self.discoveredPeers[index].state == .disconnected {
+                    self.discoveredPeers[index].state = .discovered
+                    self.discoveredPeers[index].discoveryInfo = info
+                }
+            } else {
+                // Add new peer to discovered list
+                self.discoveredPeers.append(PeerInfo(
+                    peerId: peerID,
+                    state: .discovered,
+                    discoveryInfo: info
+                ))
+                
+                self.messages.append("System: Discovered new peer \(peerID.displayName)")
+            }
         }
-        
-        // Include discovery info when inviting
-        let contextInfo = "MultiPeerDemo invitation".data(using: .utf8)
-        browser.invitePeer(peerID, to: session, withContext: contextInfo, timeout: 60)
     }
     
     func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
         print("👋 Lost peer: \(peerID.displayName)")
+        
         DispatchQueue.main.async {
-            self.messages.append("System: Lost sight of peer \(peerID.displayName)")
+            // If peer is connected, leave it in the list, otherwise remove it
+            if !self.session.connectedPeers.contains(peerID) {
+                // Remove from discovered peers if not connected
+                if let index = self.discoveredPeers.firstIndex(where: { 
+                    $0.peerId == peerID && $0.state != .connected && $0.state != .connecting 
+                }) {
+                    self.discoveredPeers.remove(at: index)
+                    self.messages.append("System: Lost sight of peer \(peerID.displayName)")
+                }
+                
+                // Remove any pending invitations
+                self.pendingInvitations.removeValue(forKey: peerID)
+            }
         }
     }
     
