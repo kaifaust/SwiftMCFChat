@@ -17,17 +17,46 @@ import AppKit
 class MultipeerService: NSObject, ObservableObject {
     // MARK: - Properties
     
-    // The local peer ID representing this device
+    // The local peer ID representing this device - now persistent across app launches
     private let myPeerId: MCPeerID = {
+        let defaults = UserDefaults.standard
+        
+        // Get the current device name to check for changes
         #if canImport(UIKit)
-        let peerId = MCPeerID(displayName: UIDevice.current.name)
-        print("📱 Created peer ID: \(peerId.displayName)")
-        return peerId
+        let currentDisplayName = UIDevice.current.name
         #else
-        let peerId = MCPeerID(displayName: Host.current().localizedName ?? "Unknown Mac")
-        print("💻 Created peer ID: \(peerId.displayName)")
-        return peerId
+        let currentDisplayName = Host.current().localizedName ?? "Unknown Mac"
         #endif
+        
+        // Check for stored display name
+        let oldDisplayName = defaults.string(forKey: UserDefaultsKeys.peerDisplayName)
+        
+        // If we have a previous name and it matches the current name, try to restore the peer ID
+        if let oldDisplayName = oldDisplayName, oldDisplayName == currentDisplayName,
+           let peerIDData = defaults.data(forKey: UserDefaultsKeys.peerID),
+           let savedPeerID = try? NSKeyedUnarchiver.unarchivedObject(ofClass: MCPeerID.self, from: peerIDData) {
+            
+            print("📱 Loaded saved peer ID: \(savedPeerID.displayName)")
+            return savedPeerID
+        } else {
+            // Create a new peer ID and save it
+            #if canImport(UIKit)
+            let newPeerId = MCPeerID(displayName: currentDisplayName)
+            #else
+            let newPeerId = MCPeerID(displayName: currentDisplayName)
+            #endif
+            
+            // Archive the peer ID and save it along with the display name
+            if let peerIDData = try? NSKeyedArchiver.archivedData(withRootObject: newPeerId, requiringSecureCoding: true) {
+                defaults.set(peerIDData, forKey: UserDefaultsKeys.peerID)
+                defaults.set(currentDisplayName, forKey: UserDefaultsKeys.peerDisplayName)
+                print("📱 Created and saved new peer ID: \(newPeerId.displayName)")
+            } else {
+                print("⚠️ Failed to archive peer ID")
+            }
+            
+            return newPeerId
+        }
     }()
     
     // User identity that remains consistent across devices
@@ -38,6 +67,8 @@ class MultipeerService: NSObject, ObservableObject {
     private enum UserDefaultsKeys {
         static let userId = "MultipeerDemo.userId"
         static let messages = "MultipeerDemo.messages"
+        static let peerID = "MultipeerDemo.peerID"
+        static let peerDisplayName = "MultipeerDemo.peerDisplayName"
     }
     
     // Service type should be a unique identifier, following Bonjour naming conventions:
