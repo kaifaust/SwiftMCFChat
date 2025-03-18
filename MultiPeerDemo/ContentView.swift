@@ -52,22 +52,46 @@ struct ContentView: View {
             }
             .padding()
             
-            // Message list with autoscroll
+            // Message list with improved styling and autoscroll
             ScrollViewReader { scrollView in
                 List {
                     ForEach(Array(multipeerService.messages.enumerated()), id: \.element) { index, message in
-                        Text(message)
-                            .padding(4)
-                            .id(index)
-                            .background(message.starts(with: "System:") ? Color.gray.opacity(0.1) : Color.clear)
-                            .cornerRadius(4)
+                        HStack {
+                            if message.starts(with: "System:") {
+                                Image(systemName: "exclamationmark.circle")
+                                    .foregroundColor(.gray)
+                                
+                                Text(message)
+                                    .foregroundColor(.gray)
+                                    .italic()
+                                    .font(.footnote)
+                            } else if message.starts(with: "Me:") {
+                                Text(message)
+                                    .foregroundColor(.blue)
+                                    .padding(6)
+                                    .background(Color.blue.opacity(0.1))
+                                    .cornerRadius(8)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                            } else {
+                                Text(message)
+                                    .padding(6)
+                                    .background(Color.gray.opacity(0.1))
+                                    .cornerRadius(8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .id(index)
+                        .padding(.vertical, 2)
                     }
                     .onChange(of: multipeerService.messages.count) { _ in
                         if !multipeerService.messages.isEmpty {
-                            scrollView.scrollTo(multipeerService.messages.count - 1, anchor: .bottom)
+                            withAnimation {
+                                scrollView.scrollTo(multipeerService.messages.count - 1, anchor: .bottom)
+                            }
                         }
                     }
                 }
+                .listStyle(.plain)
             }
             
             // Connection controls
@@ -91,16 +115,28 @@ struct ContentView: View {
                 
                 Spacer()
                 
-                // Connected peers with better formatting
+                // Connected peers with improved formatting and badge count
                 if !multipeerService.connectedPeers.isEmpty {
                     HStack {
-                        Image(systemName: "person.2.fill")
+                        Image(systemName: multipeerService.connectedPeers.count > 1 ? "person.3.fill" : "person.fill")
                             .foregroundColor(.green)
                         
                         Text(multipeerService.connectedPeers.map { $0.displayName }.joined(separator: ", "))
                             .font(.caption)
+                            .foregroundColor(.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
+                            .padding(.trailing, 4)
+                        
+                        // Add badge with count
+                        if multipeerService.connectedPeers.count > 0 {
+                            Text("\(multipeerService.connectedPeers.count)")
+                                .font(.caption2.bold())
+                                .foregroundColor(.white)
+                                .padding(4)
+                                .background(Color.green)
+                                .clipShape(Circle())
+                        }
                     }
                 }
             }

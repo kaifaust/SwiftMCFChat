@@ -18,8 +18,8 @@ struct MultiPeerDemoApp: App {
         //    "MultiPeerDemo needs to access your local network to discover and connect to nearby devices."
         //
         // 2. NSBonjourServices with values:
-        //    - _mpd-messages._tcp
-        //    - _mpd-messages._udp
+        //    - _multipdemo-chat._tcp
+        //    - _multipdemo-chat._udp
         //
         // To add these to your Xcode project:
         // 1. Select your target in Xcode
@@ -38,7 +38,7 @@ struct MultiPeerDemoApp: App {
         print("💻 Running on macOS device")
         #endif
         
-        print("📡 Service type: mpd-messages")
+        print("📡 Service type: multipdemo-chat")
     }
     
     var body: some Scene {
