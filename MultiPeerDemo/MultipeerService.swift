@@ -169,6 +169,7 @@ class MultipeerService: NSObject, ObservableObject {
         case disconnected = "Disconnected"
         case invitationSent = "Invitation Sent"
         case invitationReceived = "Invitation Received"
+        case rejected = "Invitation Declined"
     }
     
     // MARK: - Initialization
@@ -308,7 +309,7 @@ class MultipeerService: NSObject, ObservableObject {
                 handler(true, session)
             } else {
                 print("❌ Declining invitation from: \(peerInfo.peerId.displayName)")
-                updatePeerState(peerInfo.peerId, to: .discovered)
+                updatePeerState(peerInfo.peerId, to: .rejected)
                 
                 DispatchQueue.main.async {
                     self.messages.append(ChatMessage.systemMessage("Declining invitation from \(peerInfo.peerId.displayName)"))
@@ -847,7 +848,13 @@ extension MultipeerService: MCSessionDelegate {
                 // If the peer exists in our discovered list, update its state,
                 // otherwise it might have been removed already
                 if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
-                    self.discoveredPeers[index].state = .disconnected
+                    // If we were in invitationSent state and now not connected, it means invitation was declined
+                    if self.discoveredPeers[index].state == .invitationSent {
+                        self.discoveredPeers[index].state = .rejected
+                        self.messages.append(ChatMessage.systemMessage("Invitation declined by \(peerID.displayName)"))
+                    } else {
+                        self.discoveredPeers[index].state = .disconnected
+                    }
                 }
                 
             @unknown default:

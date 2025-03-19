@@ -149,7 +149,7 @@ struct ContentView: View {
                                 .padding(.top, 4)
                             
                             let availablePeers = multipeerService.discoveredPeers.filter { 
-                                $0.state == .discovered || $0.state == .invitationSent
+                                $0.state == .discovered || $0.state == .invitationSent || $0.state == .rejected
                             }
                             
                             if !availablePeers.isEmpty {
@@ -400,8 +400,8 @@ struct ContentView: View {
     
     // Handle peer action based on its current state
     private func handlePeerAction(_ peer: MultipeerService.PeerInfo) {
-        if peer.state == .discovered {
-            // Invite peer
+        if peer.state == .discovered || peer.state == .rejected {
+            // Invite peer (or retry invitation for rejected peers)
             multipeerService.invitePeer(peer)
         }
         // For invitationSent peers, we don't want to do anything when tapped
@@ -502,6 +502,8 @@ struct PeerItemView: View {
             return "x.circle"
         case .invitationSent:
             return "envelope"
+        case .rejected:
+            return "xmark.circle"
         default:
             return "person.crop.circle.badge.questionmark"
         }
@@ -520,6 +522,8 @@ struct PeerItemView: View {
             return .red
         case .invitationSent:
             return .purple
+        case .rejected:
+            return .orange
         default:
             return .gray
         }
@@ -617,7 +621,8 @@ struct PeerRowView: View {
     
     // Determine if peer state is actionable (can be tapped to connect)
     private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
-        return state == .discovered // Only discovered peers can be tapped to connect
+        // Both discovered and rejected peers can be tapped to connect/retry
+        return state == .discovered || state == .rejected
         // We don't make invitationSent peers actionable since clicking again would be redundant
     }
     
@@ -634,6 +639,8 @@ struct PeerRowView: View {
             return "x.circle"
         case .invitationSent:
             return "envelope"
+        case .rejected:
+            return "xmark.circle"
         default:
             return "person.crop.circle.badge.questionmark"
         }
@@ -652,6 +659,8 @@ struct PeerRowView: View {
             return .red
         case .invitationSent:
             return .purple
+        case .rejected:
+            return .orange
         default:
             return .gray
         }
