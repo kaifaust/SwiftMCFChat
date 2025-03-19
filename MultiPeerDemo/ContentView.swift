@@ -149,7 +149,7 @@ struct ContentView: View {
                                 .padding(.top, 4)
                             
                             let availablePeers = multipeerService.discoveredPeers.filter { 
-                                $0.state == .discovered 
+                                $0.state == .discovered || $0.state == .invitationSent
                             }
                             
                             if !availablePeers.isEmpty {
@@ -404,6 +404,9 @@ struct ContentView: View {
             // Invite peer
             multipeerService.invitePeer(peer)
         }
+        // For invitationSent peers, we don't want to do anything when tapped
+        // They're already in a waiting state
+        
         // All other states don't need manual action or are handled automatically
     }
     
@@ -568,20 +571,23 @@ struct PeerRowView: View {
             
             // Action buttons - these remain independently clickable
             HStack(spacing: 8) {
-                // Forget button
-                Button(action: onForget) {
-                    Text("Forget")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(6)
+                // Only show Forget button for connected peers
+                if peer.state == .connected {
+                    // Forget button
+                    Button(action: onForget) {
+                        Text("Forget")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(.red)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
                 }
-                .buttonStyle(BorderlessButtonStyle())
                 
-                // Block button
+                // Block button - show for all peers
                 Button(action: onBlock) {
                     Text("Block")
                         .font(.caption)
@@ -611,7 +617,8 @@ struct PeerRowView: View {
     
     // Determine if peer state is actionable (can be tapped to connect)
     private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
-        return state == .discovered
+        return state == .discovered // Only discovered peers can be tapped to connect
+        // We don't make invitationSent peers actionable since clicking again would be redundant
     }
     
     // Get appropriate icon for peer state
