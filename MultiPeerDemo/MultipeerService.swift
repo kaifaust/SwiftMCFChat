@@ -166,7 +166,6 @@ class MultipeerService: NSObject, ObservableObject {
         case discovered = "Discovered"
         case connecting = "Connecting..."
         case connected = "Connected"
-        case disconnected = "Disconnected"
         case invitationSent = "Invitation Sent"
         case invitationReceived = "Invitation Received"
         case rejected = "Invitation Declined"
@@ -729,12 +728,8 @@ class MultipeerService: NSObject, ObservableObject {
                 )
                 self.session.delegate = self
                 
-                // Update connection state for all peers
-                for i in 0..<self.discoveredPeers.count {
-                    if self.discoveredPeers[i].state == .connected {
-                        self.discoveredPeers[i].state = .disconnected
-                    }
-                }
+                // Update connection state for all peers and remove connected peers
+                self.discoveredPeers.removeAll(where: { $0.state == .connected })
                 self.connectedPeers = []
                 
                 // Restart browsing and advertising if they were active
@@ -852,8 +847,9 @@ extension MultipeerService: MCSessionDelegate {
                     if self.discoveredPeers[index].state == .invitationSent {
                         self.discoveredPeers[index].state = .rejected
                         self.messages.append(ChatMessage.systemMessage("Invitation declined by \(peerID.displayName)"))
-                    } else {
-                        self.discoveredPeers[index].state = .disconnected
+                    } else if self.discoveredPeers[index].state == .connected {
+                        // Remove connected peers when they disconnect
+                        self.discoveredPeers.remove(at: index)
                     }
                 }
                 
@@ -957,12 +953,8 @@ extension MultipeerService: MCSessionDelegate {
                 )
                 self.session.delegate = self
                 
-                // Update all connected peers to disconnected
-                for i in 0..<self.discoveredPeers.count {
-                    if self.discoveredPeers[i].state == .connected {
-                        self.discoveredPeers[i].state = .disconnected
-                    }
-                }
+                // Remove all connected peers when session is recreated
+                self.discoveredPeers.removeAll(where: { $0.state == .connected })
                 self.connectedPeers = []
                 
                 // Restart browsing and advertising
@@ -1373,11 +1365,8 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
             
             // Check if already in discovered list
             if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
-                // Update peer info if it has changed state
-                if self.discoveredPeers[index].state == .disconnected {
-                    self.discoveredPeers[index].state = .discovered
-                    self.discoveredPeers[index].discoveryInfo = info
-                }
+                // Always update discovery info
+                self.discoveredPeers[index].discoveryInfo = info
             } else {
                 // Add new peer to discovered list
                 self.discoveredPeers.append(PeerInfo(
@@ -1410,14 +1399,14 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                 // Special handling based on current peer state
                 switch currentState {
                 case .connected:
-                    // If connected, keep it but mark as disconnected
-                    self.discoveredPeers[index].state = .disconnected
+                    // If connected, remove it when it goes offline
+                    self.discoveredPeers.remove(at: index)
                     self.messages.append(ChatMessage.systemMessage("Device \(peerID.displayName) is now offline"))
                     
-                case .disconnected, .rejected:
-                    // If already disconnected or rejected, keep it in the list 
-                    // (important for persistent connections across app restarts)
-                    print("🔄 Keeping disconnected/rejected peer in the list: \(peerID.displayName)")
+                case .rejected:
+                    // If rejected, keep it in the list 
+                    // (important for retrying connections)
+                    print("🔄 Keeping rejected peer in the list: \(peerID.displayName)")
                     
                 case .connecting, .invitationSent, .discovered, .invitationReceived:
                     // For transient states, only remove if not in session.connectedPeers
@@ -1425,9 +1414,9 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                         // Check if this is a known peer we should keep
                         if let userId = self.discoveredPeers[index].discoveryInfo?["userId"],
                            self.knownPeers.contains(where: { $0.userId == userId }) {
-                            // This is a known peer, keep it but mark disconnected
-                            self.discoveredPeers[index].state = .disconnected
-                            print("🔄 Keeping known peer as disconnected: \(peerID.displayName)")
+                            // Known peers should go back to discovered state so they can be reconnected
+                            self.discoveredPeers[index].state = .discovered
+                            print("🔄 Resetting known peer to discovered state: \(peerID.displayName)")
                         } else {
                             // Unknown peer in transient state, safe to remove
                             self.discoveredPeers.remove(at: index)

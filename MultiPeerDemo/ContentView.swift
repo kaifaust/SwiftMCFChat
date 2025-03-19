@@ -110,7 +110,7 @@ struct ContentView: View {
                                 .padding(.top, 4)
                             
                             let connectedPeers = multipeerService.discoveredPeers.filter { 
-                                $0.state == .connected || $0.state == .disconnected
+                                $0.state == .connected
                             }
                             
                             if !connectedPeers.isEmpty {
@@ -149,9 +149,8 @@ struct ContentView: View {
                                 .padding(.top, 4)
                             
                             let availablePeers = multipeerService.discoveredPeers.filter { 
-                                ($0.state == .discovered || $0.state == .invitationSent || 
-                                 $0.state == .rejected || $0.state == .connecting) &&
-                                $0.state != .disconnected // Ensure disconnected peers don't show in Available list
+                                $0.state == .discovered || $0.state == .invitationSent || 
+                                $0.state == .rejected || $0.state == .connecting
                             }
                             
                             if !availablePeers.isEmpty {
@@ -402,8 +401,8 @@ struct ContentView: View {
     
     // Handle peer action based on its current state
     private func handlePeerAction(_ peer: MultipeerService.PeerInfo) {
-        if peer.state == .discovered || peer.state == .rejected || peer.state == .disconnected {
-            // Invite peer (or retry invitation for rejected/disconnected peers)
+        if peer.state == .discovered || peer.state == .rejected {
+            // Invite peer (or retry invitation for rejected peers)
             multipeerService.invitePeer(peer)
         }
         // For invitationSent peers, we don't want to do anything when tapped
@@ -500,8 +499,6 @@ struct PeerItemView: View {
             return "arrow.triangle.2.circlepath"
         case .connected:
             return "checkmark.circle"
-        case .disconnected:
-            return "x.circle"
         case .invitationSent:
             return "envelope"
         case .rejected:
@@ -520,8 +517,6 @@ struct PeerItemView: View {
             return .orange
         case .connected:
             return .green
-        case .disconnected:
-            return .red
         case .invitationSent:
             return .purple
         case .rejected:
@@ -577,8 +572,8 @@ struct PeerRowView: View {
             
             // Action buttons - these remain independently clickable
             HStack(spacing: 8) {
-                // Show Forget button for connected and disconnected peers
-                if peer.state == .connected || peer.state == .disconnected {
+                // Show Forget button for connected peers
+                if peer.state == .connected {
                     // Forget button
                     Button(action: onForget) {
                         Text("Forget")
@@ -623,8 +618,8 @@ struct PeerRowView: View {
     
     // Determine if peer state is actionable (can be tapped to connect)
     private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
-        // Discovered, rejected, and disconnected peers can be tapped to connect/retry
-        return state == .discovered || state == .rejected || state == .disconnected
+        // Discovered and rejected peers can be tapped to connect/retry
+        return state == .discovered || state == .rejected
         // We don't make invitationSent peers actionable since clicking again would be redundant
     }
     
@@ -637,8 +632,6 @@ struct PeerRowView: View {
             return "arrow.triangle.2.circlepath"
         case .connected:
             return "checkmark.circle"
-        case .disconnected:
-            return "x.circle"
         case .invitationSent:
             return "envelope"
         case .rejected:
@@ -657,8 +650,6 @@ struct PeerRowView: View {
             return .orange
         case .connected:
             return .green
-        case .disconnected:
-            return .red
         case .invitationSent:
             return .purple
         case .rejected:
