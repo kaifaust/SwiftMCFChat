@@ -104,13 +104,13 @@ struct ContentView: View {
                     if showPeersList {
                         // Connected devices section
                         VStack(alignment: .leading) {
-                            Text("Connections")
+                            Text("My Devices")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                                 .padding(.top, 4)
                             
                             let connectedPeers = multipeerService.discoveredPeers.filter { 
-                                $0.state == .connected || $0.state == .connecting
+                                $0.state == .connected || $0.state == .disconnected
                             }
                             
                             if !connectedPeers.isEmpty {
@@ -131,7 +131,7 @@ struct ContentView: View {
                             } else {
                                 HStack {
                                     Spacer()
-                                    Text("No connected devices")
+                                    Text("No known devices")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                         .italic()
@@ -143,13 +143,15 @@ struct ContentView: View {
                         
                         // Available devices section
                         VStack(alignment: .leading) {
-                            Text("Available")
+                            Text("Other Devices")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                                 .padding(.top, 4)
                             
                             let availablePeers = multipeerService.discoveredPeers.filter { 
-                                $0.state == .discovered || $0.state == .invitationSent || $0.state == .rejected
+                                ($0.state == .discovered || $0.state == .invitationSent || 
+                                 $0.state == .rejected || $0.state == .connecting) &&
+                                $0.state != .disconnected // Ensure disconnected peers don't show in Available list
                             }
                             
                             if !availablePeers.isEmpty {
@@ -170,7 +172,7 @@ struct ContentView: View {
                             } else {
                                 HStack {
                                     Spacer()
-                                    Text("No available devices found")
+                                    Text("No other devices found")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                         .italic()
@@ -400,8 +402,8 @@ struct ContentView: View {
     
     // Handle peer action based on its current state
     private func handlePeerAction(_ peer: MultipeerService.PeerInfo) {
-        if peer.state == .discovered || peer.state == .rejected {
-            // Invite peer (or retry invitation for rejected peers)
+        if peer.state == .discovered || peer.state == .rejected || peer.state == .disconnected {
+            // Invite peer (or retry invitation for rejected/disconnected peers)
             multipeerService.invitePeer(peer)
         }
         // For invitationSent peers, we don't want to do anything when tapped
@@ -575,8 +577,8 @@ struct PeerRowView: View {
             
             // Action buttons - these remain independently clickable
             HStack(spacing: 8) {
-                // Only show Forget button for connected peers
-                if peer.state == .connected {
+                // Show Forget button for connected and disconnected peers
+                if peer.state == .connected || peer.state == .disconnected {
                     // Forget button
                     Button(action: onForget) {
                         Text("Forget")
@@ -621,8 +623,8 @@ struct PeerRowView: View {
     
     // Determine if peer state is actionable (can be tapped to connect)
     private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
-        // Both discovered and rejected peers can be tapped to connect/retry
-        return state == .discovered || state == .rejected
+        // Discovered, rejected, and disconnected peers can be tapped to connect/retry
+        return state == .discovered || state == .rejected || state == .disconnected
         // We don't make invitationSent peers actionable since clicking again would be redundant
     }
     

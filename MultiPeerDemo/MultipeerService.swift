@@ -1403,19 +1403,42 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
         print("👋 Lost peer: \(peerID.displayName)")
         
         DispatchQueue.main.async {
-            // If peer is connected, leave it in the list, otherwise remove it
-            if !self.session.connectedPeers.contains(peerID) {
-                // Remove from discovered peers if not connected
-                if let index = self.discoveredPeers.firstIndex(where: { 
-                    $0.peerId == peerID && $0.state != .connected && $0.state != .connecting 
-                }) {
-                    self.discoveredPeers.remove(at: index)
-                    self.messages.append(ChatMessage.systemMessage("Lost sight of peer \(peerID.displayName)"))
-                }
+            // If the peer is in our discovered list
+            if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
+                let currentState = self.discoveredPeers[index].state
                 
-                // Remove any pending invitations
-                self.pendingInvitations.removeValue(forKey: peerID)
+                // Special handling based on current peer state
+                switch currentState {
+                case .connected:
+                    // If connected, keep it but mark as disconnected
+                    self.discoveredPeers[index].state = .disconnected
+                    self.messages.append(ChatMessage.systemMessage("Device \(peerID.displayName) is now offline"))
+                    
+                case .disconnected, .rejected:
+                    // If already disconnected or rejected, keep it in the list 
+                    // (important for persistent connections across app restarts)
+                    print("🔄 Keeping disconnected/rejected peer in the list: \(peerID.displayName)")
+                    
+                case .connecting, .invitationSent, .discovered, .invitationReceived:
+                    // For transient states, only remove if not in session.connectedPeers
+                    if !self.session.connectedPeers.contains(peerID) {
+                        // Check if this is a known peer we should keep
+                        if let userId = self.discoveredPeers[index].discoveryInfo?["userId"],
+                           self.knownPeers.contains(where: { $0.userId == userId }) {
+                            // This is a known peer, keep it but mark disconnected
+                            self.discoveredPeers[index].state = .disconnected
+                            print("🔄 Keeping known peer as disconnected: \(peerID.displayName)")
+                        } else {
+                            // Unknown peer in transient state, safe to remove
+                            self.discoveredPeers.remove(at: index)
+                            self.messages.append(ChatMessage.systemMessage("Lost sight of peer \(peerID.displayName)"))
+                        }
+                    }
+                }
             }
+            
+            // Remove any pending invitations
+            self.pendingInvitations.removeValue(forKey: peerID)
         }
     }
     
