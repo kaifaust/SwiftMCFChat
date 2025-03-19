@@ -13,7 +13,7 @@ import UIKit
 #endif
 
 struct ContentView: View {
-    @StateObject private var multipeerService = MultipeerService()
+    @EnvironmentObject var multipeerService: MultipeerService
     @State private var messageText = ""
     @State private var isSyncEnabled = true
     @State private var showInfoAlert = false

@@ -6,9 +6,14 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @main
 struct MultiPeerDemoApp: App {
+    @StateObject private var multipeerService = MultipeerService()
+    
     init() {
         // IMPORTANT: For this app to work correctly, the following Info.plist entries
         // must be added through Xcode's target settings:
@@ -44,6 +49,15 @@ struct MultiPeerDemoApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(multipeerService)
+                #if canImport(UIKit)
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    multipeerService.handleAppDidBecomeActive()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                    multipeerService.handleAppDidEnterBackground()
+                }
+                #endif
         }
     }
 }

@@ -229,6 +229,8 @@ class MultipeerService: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.messages.append(ChatMessage.systemMessage("Service initialized with ID \(self.myPeerId.displayName)"))
         }
+        
+        // App lifecycle notifications are handled in MultiPeerDemoApp.swift
     }
     
     // MARK: - Public methods
@@ -354,11 +356,9 @@ class MultipeerService: NSObject, ObservableObject {
     private func updatePeerState(_ peerId: MCPeerID, to state: PeerState, reason: String = "No reason provided") {
         DispatchQueue.main.async {
             let oldState: PeerState?
-            let isNewPeer: Bool
             
             if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerId }) {
                 oldState = self.discoveredPeers[index].state
-                isNewPeer = false
                 
                 // Only log if state actually changed
                 if oldState != state {
@@ -368,7 +368,6 @@ class MultipeerService: NSObject, ObservableObject {
             } else {
                 // Add the peer if it doesn't exist yet (for proactive approaches)
                 oldState = nil
-                isNewPeer = true
                 
                 self.discoveredPeers.append(PeerInfo(
                     peerId: peerId,
@@ -1370,6 +1369,43 @@ extension MultipeerService: MCSessionDelegate {
         print("🔐 Received certificate from \(peerID.displayName) - auto-accepting")
         certificateHandler(true)
     }
+    
+    // MARK: - App State Handling
+    
+    // Call this method when app becomes active
+    func handleAppDidBecomeActive() {
+        print("🔄 App became active - resuming connections")
+        
+        // The framework automatically resumes advertising and browsing,
+        // but we need to log our state to help with debugging
+        
+        // Log current state
+        print("📊 Current state:")
+        print("   isHosting: \(isHosting)")
+        print("   isBrowsing: \(isBrowsing)") 
+        print("   connectedPeers: \(session.connectedPeers.count)")
+        print("   discoveredPeers: \(discoveredPeers.count)")
+        
+        // Session will have been disconnected when app was backgrounded
+        // Log all our discovered peers
+        print("📋 Current discovered peers after becoming active:")
+        for (index, peer) in discoveredPeers.enumerated() {
+            print("   \(index): \(peer.peerId.displayName), state: \(peer.state.rawValue), userId: \(peer.discoveryInfo?["userId"] ?? "unknown")")
+        }
+    }
+    
+    // Call this method when app enters background
+    func handleAppDidEnterBackground() {
+        print("⏸️ App entered background - framework will disconnect session")
+        
+        // Framework automatically stops advertising, browsing, and disconnects session
+        // Just log our current state for debugging
+        print("📊 State before backgrounding:")
+        print("   isHosting: \(isHosting)")
+        print("   isBrowsing: \(isBrowsing)")
+        print("   connectedPeers: \(session.connectedPeers.count)")
+        print("   discoveredPeers: \(discoveredPeers.count)")
+    }
 }
 
 // MARK: - MCNearbyServiceAdvertiserDelegate
@@ -1459,6 +1495,13 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         print("🔍 Found peer: \(peerID.displayName), info: \(info?.description ?? "none")")
         
+        // Get app state information for diagnostics
+        #if canImport(UIKit)
+        let appStateString = UIApplication.shared.applicationState == .active ? "active" : 
+                            UIApplication.shared.applicationState == .background ? "background" : "inactive"
+        print("📱 App state when found peer: \(appStateString)")
+        #endif
+        
         // Get userId from discovery info if available
         let userId = info?["userId"]
         
@@ -1476,10 +1519,18 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                 return
             }
             
+            // Check if this is a known peer
+            let isKnownPeer = userId != nil && self.knownPeers.contains(where: { $0.userId == userId })
+            print("ℹ️ Found peer: \(peerID.displayName), isKnown: \(isKnownPeer ? "Yes" : "No")")
+            
             // Check if already in discovered list
             if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
                 // Always update discovery info
+                let oldInfo = self.discoveredPeers[index].discoveryInfo
                 self.discoveredPeers[index].discoveryInfo = info
+                print("🔄 Updated discovery info for existing peer: \(peerID.displayName)")
+                print("   Old info: \(oldInfo?.description ?? "none")")
+                print("   New info: \(info?.description ?? "none")")
             } else {
                 // Add new peer to discovered list
                 self.discoveredPeers.append(PeerInfo(
@@ -1488,7 +1539,20 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                     discoveryInfo: info
                 ))
                 
+                print("➕ Added new peer to discovered list: \(peerID.displayName)")
                 self.messages.append(ChatMessage.systemMessage("Discovered new peer \(peerID.displayName)"))
+                
+                // If this is a known peer, update the last seen time
+                if let userId = userId, isKnownPeer {
+                    print("📝 Updating last seen time for known peer: \(peerID.displayName)")
+                    self.updateKnownPeer(displayName: peerID.displayName, userId: userId)
+                }
+            }
+            
+            // Log current content of discoveredPeers
+            print("📋 Current discovered peers list:")
+            for (index, peer) in self.discoveredPeers.enumerated() {
+                print("   \(index): \(peer.peerId.displayName), state: \(peer.state.rawValue), userId: \(peer.discoveryInfo?["userId"] ?? "unknown")")
             }
         }
     }
@@ -1496,15 +1560,30 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
         print("👋 Lost peer: \(peerID.displayName)")
         
+        // Get app state information for diagnostics
+        #if canImport(UIKit)
+        let appStateString = UIApplication.shared.applicationState == .active ? "active" : 
+                            UIApplication.shared.applicationState == .background ? "background" : "inactive"
+        print("📱 App state when lost peer: \(appStateString)")
+        #endif
+        
         DispatchQueue.main.async {
             // If the peer is in our discovered list
             if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
                 let currentState = self.discoveredPeers[index].state
+                let userId = self.discoveredPeers[index].discoveryInfo?["userId"]
+                
+                // Log info about the lost peer to help understand why it's being removed
+                print("ℹ️ Lost peer details: peerID=\(peerID.displayName), state=\(currentState.rawValue), userId=\(userId ?? "unknown")")
+                print("ℹ️ Connected peers count: \(self.session.connectedPeers.count)")
+                print("ℹ️ Is known peer? \(userId != nil && self.knownPeers.contains(where: { $0.userId == userId }) ? "Yes" : "No")")
+                print("ℹ️ Is sync enabled? \(userId != nil && self.syncEnabledPeers.contains(userId!) ? "Yes" : "No")")
                 
                 // Special handling based on current peer state
                 switch currentState {
                 case .connected:
                     // If connected, remove it when it goes offline
+                    print("🔄 Removing connected peer that went offline: \(peerID.displayName)")
                     self.discoveredPeers.remove(at: index)
                     self.messages.append(ChatMessage.systemMessage("Device \(peerID.displayName) is now offline"))
                     
@@ -1517,18 +1596,23 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                     // For transient states, only remove if not in session.connectedPeers
                     if !self.session.connectedPeers.contains(peerID) {
                         // Check if this is a known peer we should keep
-                        if let userId = self.discoveredPeers[index].discoveryInfo?["userId"],
+                        if let userId = userId,
                            self.knownPeers.contains(where: { $0.userId == userId }) {
                             // Known peers should go back to discovered state so they can be reconnected
                             self.discoveredPeers[index].state = .discovered
                             print("🔄 Resetting known peer to discovered state: \(peerID.displayName)")
                         } else {
                             // Unknown peer in transient state, safe to remove
+                            print("🔄 Removing unknown peer: \(peerID.displayName) (not in known peers list)")
                             self.discoveredPeers.remove(at: index)
                             self.messages.append(ChatMessage.systemMessage("Lost sight of peer \(peerID.displayName)"))
                         }
+                    } else {
+                        print("⚠️ Peer not in session's connected peers but keeping it: \(peerID.displayName)")
                     }
                 }
+            } else {
+                print("ℹ️ Lost peer not found in discoveredPeers: \(peerID.displayName)")
             }
             
             // Remove any pending invitations
