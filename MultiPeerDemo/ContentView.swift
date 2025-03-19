@@ -109,12 +109,27 @@ struct ContentView: View {
                                 .foregroundColor(.secondary)
                                 .padding(.top, 4)
                             
-                            let connectedPeers = multipeerService.discoveredPeers.filter { 
-                                $0.state == .connected
+                            // Get peers for My Devices section - this includes:
+                            // 1. Currently connected peers
+                            // 2. Known peers that have sync enabled (even if not currently connected)
+                            let myDevicesPeers = multipeerService.discoveredPeers.filter { peer in
+                                // Include connected peers
+                                if peer.state == .connected {
+                                    return true
+                                }
+                                
+                                // Include discovered peers that have sync enabled
+                                if peer.state == .discovered, 
+                                   let userId = peer.discoveryInfo?["userId"],
+                                   multipeerService.isSyncEnabled(for: userId) {
+                                    return true
+                                }
+                                
+                                return false
                             }
                             
-                            if !connectedPeers.isEmpty {
-                                ForEach(connectedPeers) { peer in
+                            if !myDevicesPeers.isEmpty {
+                                ForEach(myDevicesPeers) { peer in
                                     PeerRowView(peer: peer, action: {
                                         handlePeerAction(peer)
                                     }, onForget: {
@@ -148,9 +163,23 @@ struct ContentView: View {
                                 .foregroundColor(.secondary)
                                 .padding(.top, 4)
                             
-                            let availablePeers = multipeerService.discoveredPeers.filter { 
-                                $0.state == .discovered || $0.state == .invitationSent || 
-                                $0.state == .rejected || $0.state == .connecting
+                            // Get peers for Other Devices section - discovered peers that are not in My Devices
+                            let availablePeers = multipeerService.discoveredPeers.filter { peer in
+                                // Exclude connected peers (already in My Devices)
+                                if peer.state == .connected {
+                                    return false
+                                }
+                                
+                                // Exclude sync-enabled discovered peers (already in My Devices)
+                                if peer.state == .discovered, 
+                                   let userId = peer.discoveryInfo?["userId"],
+                                   multipeerService.isSyncEnabled(for: userId) {
+                                    return false
+                                }
+                                
+                                // Include all other non-connected peers
+                                return peer.state == .discovered || peer.state == .invitationSent || 
+                                       peer.state == .rejected || peer.state == .connecting
                             }
                             
                             if !availablePeers.isEmpty {
@@ -527,138 +556,7 @@ struct PeerItemView: View {
     }
 }
 
-// View for displaying a peer as a horizontal row with action buttons
-struct PeerRowView: View {
-    let peer: MultipeerService.PeerInfo
-    let action: () -> Void
-    let onForget: () -> Void
-    let onBlock: () -> Void
-    @EnvironmentObject var multipeerService: MultipeerService
-    
-    var body: some View {
-        HStack {
-            // Main content - this part will be clickable for "discovered" peers
-            HStack {
-                // Peer icon
-                Image(systemName: iconForState(peer.state))
-                    .font(.system(size: 18))
-                    .foregroundColor(colorForState(peer.state))
-                    .frame(width: 32, height: 32)
-                    .background(colorForState(peer.state).opacity(0.2))
-                    .clipShape(Circle())
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    // Peer name
-                    Text(peer.peerId.displayName)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    
-                    // Peer state
-                    Text(peer.state.rawValue)
-                        .font(.caption)
-                        .foregroundColor(colorForState(peer.state))
-                }
-                
-                Spacer()
-            }
-            .contentShape(Rectangle()) // Make the entire area tappable
-            .onTapGesture {
-                if isActionable(peer.state) {
-                    action()
-                }
-            }
-            
-            // Action buttons - these remain independently clickable
-            HStack(spacing: 8) {
-                // Show Forget button for connected peers
-                if peer.state == .connected {
-                    // Forget button
-                    Button(action: onForget) {
-                        Text("Forget")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundColor(.red)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.red.opacity(0.1))
-                            .cornerRadius(6)
-                    }
-                    .buttonStyle(BorderlessButtonStyle())
-                }
-                
-                // Block button - show for all peers
-                Button(action: onBlock) {
-                    Text("Block")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(BorderlessButtonStyle())
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.gray.opacity(0.1))
-        .cornerRadius(10)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(
-                    isActionable(peer.state) ? colorForState(peer.state).opacity(0.3) : Color.secondary.opacity(0.3), 
-                    lineWidth: isActionable(peer.state) ? 1.5 : 1
-                )
-        )
-        .opacity(isActionable(peer.state) ? 1.0 : 0.85)
-    }
-    
-    // Determine if peer state is actionable (can be tapped to connect)
-    private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
-        // Discovered and rejected peers can be tapped to connect/retry
-        return state == .discovered || state == .rejected
-        // We don't make invitationSent peers actionable since clicking again would be redundant
-    }
-    
-    // Get appropriate icon for peer state
-    private func iconForState(_ state: MultipeerService.PeerState) -> String {
-        switch state {
-        case .discovered:
-            return "person.crop.circle.badge.plus"
-        case .connecting:
-            return "arrow.triangle.2.circlepath"
-        case .connected:
-            return "checkmark.circle"
-        case .invitationSent:
-            return "envelope"
-        case .rejected:
-            return "xmark.circle"
-        default:
-            return "person.crop.circle.badge.questionmark"
-        }
-    }
-    
-    // Get appropriate color for peer state
-    private func colorForState(_ state: MultipeerService.PeerState) -> Color {
-        switch state {
-        case .discovered:
-            return .blue
-        case .connecting:
-            return .orange
-        case .connected:
-            return .green
-        case .invitationSent:
-            return .purple
-        case .rejected:
-            return .orange
-        default:
-            return .gray
-        }
-    }
-}
+// PeerRowView moved to separate file
 
 #Preview {
     ContentView()
