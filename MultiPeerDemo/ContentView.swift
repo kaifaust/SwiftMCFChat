@@ -413,7 +413,7 @@ struct ContentView: View {
             }
         } message: {
             if let peer = selectedPeer {
-                Text("Do you want to forget device \(peer.peerId.displayName)? This will remove it from known peers and auto-connect list.")
+                Text("Do you want to forget device \(peer.peerId.displayName)? This will remove it from known peers.")
             } else {
                 Text("Do you want to forget this device?")
             }

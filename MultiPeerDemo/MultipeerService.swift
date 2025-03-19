@@ -72,7 +72,6 @@ class MultipeerService: NSObject, ObservableObject {
         static let knownPeers = "MultipeerDemo.knownPeers"
         static let blockedPeers = "MultipeerDemo.blockedPeers"
         static let syncEnabledPeers = "MultipeerDemo.syncEnabledPeers"
-        // Removed autoConnectPeers
     }
     
     // Service type should be a unique identifier, following Bonjour naming conventions:
@@ -225,7 +224,6 @@ class MultipeerService: NSObject, ObservableObject {
         loadKnownPeers()
         loadBlockedPeers()
         loadSyncEnabledPeers()
-        // Removed autoConnectPeers loading
         
         // Add message about initialized service
         DispatchQueue.main.async {
@@ -337,7 +335,6 @@ class MultipeerService: NSObject, ObservableObject {
     @Published private(set) var knownPeers: [KnownPeerInfo] = []
     @Published private(set) var blockedPeers: Set<String> = []
     @Published private(set) var syncEnabledPeers: Set<String> = []
-    // Removed autoConnectPeers property
     
     // Structure to track known peer information
     struct KnownPeerInfo: Identifiable, Codable, Equatable {
@@ -508,7 +505,6 @@ class MultipeerService: NSObject, ObservableObject {
         }
     }
     
-    // Removed autoConnectPeers save and load functions
     
     // Functions to manage sync-enabled peers
     
@@ -646,16 +642,12 @@ class MultipeerService: NSObject, ObservableObject {
     
     // MARK: - Peer Management Functions
     
-    // Removed setAutoConnect function
-    
     /// Block a user by userId
     func blockUser(userId: String) {
         DispatchQueue.main.async {
             self.blockedPeers.insert(userId)
             print("🚫 Blocked user: \(userId)")
             self.messages.append(ChatMessage.systemMessage("Blocked peer"))
-            
-            // Auto-connect functionality removed
             
             // Disconnect from any connected peers with this userId
             self.disconnectBlockedUser(userId: userId)
@@ -680,9 +672,9 @@ class MultipeerService: NSObject, ObservableObject {
         return blockedPeers.contains(userId)
     }
     
-    /// Check if we should auto-connect to a user (always returns false now)
+    /// Check if we should auto-connect to a user
     func shouldAutoConnect(to userId: String) -> Bool {
-        return false // Auto-connect functionality removed
+        return false // This app doesn't support auto-connect
     }
     
     /// Forget a device - remove from known peers, sync-enabled peers, and optionally block
@@ -1044,8 +1036,6 @@ extension MultipeerService: MCSessionDelegate {
                 $0.discoveryInfo?["userId"] == userId 
             })
             
-            // Auto-connect functionality removed
-            
             // Don't block - that's a user preference
             
             // Save changes
@@ -1369,8 +1359,6 @@ extension MultipeerService: MCNearbyServiceAdvertiserDelegate {
             return
         }
         
-        // Auto-connect functionality removed
-        
         // Store the invitation handler for later use when user accepts/declines
         pendingInvitations[peerID] = invitationHandler
         
@@ -1447,8 +1435,6 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                 ))
                 
                 self.messages.append(ChatMessage.systemMessage("Discovered new peer \(peerID.displayName)"))
-                
-                // Auto-connect functionality removed
             }
         }
     }
