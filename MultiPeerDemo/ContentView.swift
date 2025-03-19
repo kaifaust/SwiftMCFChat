@@ -356,6 +356,15 @@ struct ContentView: View {
             multipeerService.startBrowsing()
             showPeersList = true
             
+            // Log our device categorization logic
+            print("📋 Device categorization rules:")
+            print("  - My Devices section includes:")
+            print("    1. Connected peers (state == .connected)")
+            print("    2. Discovered peers with sync enabled")
+            print("  - Other Devices section includes:")
+            print("    1. Discovered peers without sync enabled")
+            print("    2. Peers with invitationSent, rejected, or connecting states")
+            
             // Register for invitation handling
             multipeerService.pendingInvitationHandler = { peerID, invitationHandler in
                 // Find or create a PeerInfo for this peer
@@ -432,12 +441,18 @@ struct ContentView: View {
     private func handlePeerAction(_ peer: MultipeerService.PeerInfo) {
         if peer.state == .discovered || peer.state == .rejected {
             // Invite peer (or retry invitation for rejected peers)
+            print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue)")
             multipeerService.invitePeer(peer)
+        } else {
+            // Log why we're not taking action for other states
+            if peer.state == .invitationSent {
+                print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: invitation already sent")
+            } else if peer.state == .connecting {
+                print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: already connecting")
+            } else if peer.state == .connected {
+                print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: already connected")
+            }
         }
-        // For invitationSent peers, we don't want to do anything when tapped
-        // They're already in a waiting state
-        
-        // All other states don't need manual action or are handled automatically
     }
     
     // Show accept/decline invitation dialog

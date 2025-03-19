@@ -277,7 +277,7 @@ class MultipeerService: NSObject, ObservableObject {
         print("📨 Inviting peer: \(peerInfo.peerId.displayName)")
         
         // Update peer state
-        updatePeerState(peerInfo.peerId, to: .invitationSent)
+        updatePeerState(peerInfo.peerId, to: .invitationSent, reason: "User initiated invitation")
         
         DispatchQueue.main.async {
             self.messages.append(ChatMessage.systemMessage("Sending invitation to \(peerInfo.peerId.displayName)"))
@@ -298,7 +298,7 @@ class MultipeerService: NSObject, ObservableObject {
         if let handler = pendingInvitations[peerInfo.peerId] {
             if accept {
                 print("✅ Accepting invitation from: \(peerInfo.peerId.displayName)")
-                updatePeerState(peerInfo.peerId, to: .connecting)
+                updatePeerState(peerInfo.peerId, to: .connecting, reason: "Invitation accepted by user")
                 
                 DispatchQueue.main.async {
                     self.messages.append(ChatMessage.systemMessage("Accepting invitation from \(peerInfo.peerId.displayName)"))
@@ -308,7 +308,7 @@ class MultipeerService: NSObject, ObservableObject {
                 handler(true, session)
             } else {
                 print("❌ Declining invitation from: \(peerInfo.peerId.displayName)")
-                updatePeerState(peerInfo.peerId, to: .rejected)
+                updatePeerState(peerInfo.peerId, to: .rejected, reason: "Invitation declined by user")
                 
                 DispatchQueue.main.async {
                     self.messages.append(ChatMessage.systemMessage("Declining invitation from \(peerInfo.peerId.displayName)"))
@@ -351,16 +351,41 @@ class MultipeerService: NSObject, ObservableObject {
     }
     
     // Helper to update peer state in the discoveredPeers array
-    private func updatePeerState(_ peerId: MCPeerID, to state: PeerState) {
+    private func updatePeerState(_ peerId: MCPeerID, to state: PeerState, reason: String = "No reason provided") {
         DispatchQueue.main.async {
+            let oldState: PeerState?
+            let isNewPeer: Bool
+            
             if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerId }) {
-                self.discoveredPeers[index].state = state
+                oldState = self.discoveredPeers[index].state
+                isNewPeer = false
+                
+                // Only log if state actually changed
+                if oldState != state {
+                    print("🔄 Peer state change: \(peerId.displayName) changed from \(oldState!.rawValue) to \(state.rawValue). Reason: \(reason)")
+                    self.discoveredPeers[index].state = state
+                }
             } else {
                 // Add the peer if it doesn't exist yet (for proactive approaches)
+                oldState = nil
+                isNewPeer = true
+                
                 self.discoveredPeers.append(PeerInfo(
                     peerId: peerId,
                     state: state
                 ))
+                
+                print("➕ New peer added: \(peerId.displayName) with initial state \(state.rawValue). Reason: \(reason)")
+            }
+            
+            // Log section placement information
+            let userIdInfo = self.discoveredPeers.first(where: { $0.peerId == peerId })?.discoveryInfo?["userId"] ?? "unknown"
+            let isSyncEnabled = userIdInfo != "unknown" && self.isSyncEnabled(for: userIdInfo)
+            
+            if state == .connected || isSyncEnabled {
+                print("📱 Device placement: \(peerId.displayName) will appear in 'My Devices' section (connected: \(state == .connected), sync enabled: \(isSyncEnabled))")
+            } else {
+                print("📱 Device placement: \(peerId.displayName) will appear in 'Other Devices' section")
             }
         }
     }
@@ -540,26 +565,49 @@ class MultipeerService: NSObject, ObservableObject {
     // Toggle sync for a specific peer by userId
     func toggleSync(for userId: String) {
         DispatchQueue.main.async {
+            let newSyncState: Bool
+            
             if self.syncEnabledPeers.contains(userId) {
                 // Disable sync
                 self.syncEnabledPeers.remove(userId)
+                newSyncState = false
                 print("🔄 Disabled sync for user: \(userId)")
             } else {
                 // Enable sync
                 self.syncEnabledPeers.insert(userId)
+                newSyncState = true
                 print("🔄 Enabled sync for user: \(userId)")
             }
             
             // Update the syncEnabled flag in knownPeers
             if let index = self.knownPeers.firstIndex(where: { $0.userId == userId }) {
-                self.knownPeers[index].syncEnabled = self.syncEnabledPeers.contains(userId)
+                self.knownPeers[index].syncEnabled = newSyncState
                 self.saveKnownPeers()
             }
             
             self.saveSyncEnabledPeers()
             
+            // Find any related discovered peers to log section change
+            let affectedPeers = self.discoveredPeers.filter { peer in
+                peer.discoveryInfo?["userId"] == userId
+            }
+            
+            for peer in affectedPeers {
+                if newSyncState {
+                    if peer.state != .connected {
+                        print("📱 Section change: \(peer.peerId.displayName) will move from 'Other Devices' to 'My Devices' section (reason: sync enabled)")
+                    }
+                } else {
+                    if peer.state != .connected {
+                        print("📱 Section change: \(peer.peerId.displayName) will move from 'My Devices' to 'Other Devices' section (reason: sync disabled)")
+                    } else {
+                        print("📱 No section change for \(peer.peerId.displayName) - remains in 'My Devices' (reason: still connected)")
+                    }
+                }
+            }
+            
             // Add system message
-            let status = self.syncEnabledPeers.contains(userId) ? "enabled" : "disabled"
+            let status = newSyncState ? "enabled" : "disabled"
             self.messages.append(ChatMessage.systemMessage("Sync \(status) for peer"))
         }
     }
@@ -843,7 +891,7 @@ extension MultipeerService: MCSessionDelegate {
                 print("📋 Connected peers list: \(session.connectedPeers.map { $0.displayName }.joined(separator: ", "))")
                 
                 // Update peer state in discovered peers list
-                self.updatePeerState(peerID, to: .connected)
+                self.updatePeerState(peerID, to: .connected, reason: "Session connection established")
                 
                 // Store peer as known if we have their userId
                 if let discoveryInfo = self.discoveredPeers.first(where: { $0.peerId == peerID })?.discoveryInfo,
@@ -864,7 +912,7 @@ extension MultipeerService: MCSessionDelegate {
                 self.messages.append(ChatMessage.systemMessage("Connecting to \(peerID.displayName)..."))
                 
                 // Update peer state in discovered peers list
-                self.updatePeerState(peerID, to: .connecting)
+                self.updatePeerState(peerID, to: .connecting, reason: "Session moving to connecting state")
                 
             case .notConnected:
                 print("❌ Disconnected from: \(peerID.displayName)")
@@ -876,9 +924,12 @@ extension MultipeerService: MCSessionDelegate {
                     // If we were in invitationSent state and now not connected, it means invitation was declined
                     if self.discoveredPeers[index].state == .invitationSent {
                         self.discoveredPeers[index].state = .rejected
+                        print("🔄 Peer state change: \(peerID.displayName) changed from invitationSent to rejected. Reason: Invitation declined (inferred from disconnect)")
+                        print("📱 Device placement: \(peerID.displayName) will appear in 'Other Devices' section")
                         self.messages.append(ChatMessage.systemMessage("Invitation declined by \(peerID.displayName)"))
                     } else if self.discoveredPeers[index].state == .connected {
                         // Remove connected peers when they disconnect
+                        print("🗑️ Removing connected peer that disconnected: \(peerID.displayName)")
                         self.discoveredPeers.remove(at: index)
                     }
                 }
@@ -1366,13 +1417,16 @@ extension MultipeerService: MCNearbyServiceAdvertiserDelegate {
         DispatchQueue.main.async {
             if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
                 // Update existing peer - keep as discovered so it appears in Available list
+                let oldState = self.discoveredPeers[index].state
                 self.discoveredPeers[index].state = .discovered
+                print("🔄 Peer state updated: \(peerID.displayName) from \(oldState.rawValue) to discovered. Reason: Received invitation, making peer available for connection")
             } else {
                 // Add new peer with discovered state
                 self.discoveredPeers.append(PeerInfo(
                     peerId: peerID,
                     state: .discovered
                 ))
+                print("➕ Added peer to discovered list: \(peerID.displayName) (Status: discovered, from invitation)")
             }
             
             self.messages.append(ChatMessage.systemMessage("Received invitation from \(peerID.displayName)"))
