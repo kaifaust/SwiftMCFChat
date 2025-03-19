@@ -114,21 +114,20 @@ struct ContentView: View {
                             }
                             
                             if !connectedPeers.isEmpty {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 10) {
-                                        ForEach(connectedPeers) { peer in
-                                            PeerItemView(peer: peer, action: {
-                                                handlePeerAction(peer)
-                                            }, onContextMenu: {
-                                                selectedPeer = peer
-                                                showForgetConfirmation = true
-                                            })
-                                            .environmentObject(multipeerService)
+                                ForEach(connectedPeers) { peer in
+                                    PeerRowView(peer: peer, action: {
+                                        handlePeerAction(peer)
+                                    }, onForget: {
+                                        selectedPeer = peer
+                                        showForgetConfirmation = true
+                                    }, onBlock: {
+                                        if let userId = peer.discoveryInfo?["userId"] {
+                                            multipeerService.blockUser(userId: userId)
                                         }
-                                    }
-                                    .padding(.vertical, 4)
+                                    })
+                                    .environmentObject(multipeerService)
+                                    .padding(.vertical, 2)
                                 }
-                                .frame(height: 90)
                             } else {
                                 HStack {
                                     Spacer()
@@ -154,21 +153,20 @@ struct ContentView: View {
                             }
                             
                             if !availablePeers.isEmpty {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 10) {
-                                        ForEach(availablePeers) { peer in
-                                            PeerItemView(peer: peer, action: {
-                                                handlePeerAction(peer)
-                                            }, onContextMenu: {
-                                                selectedPeer = peer
-                                                showForgetConfirmation = true
-                                            })
-                                            .environmentObject(multipeerService)
+                                ForEach(availablePeers) { peer in
+                                    PeerRowView(peer: peer, action: {
+                                        handlePeerAction(peer)
+                                    }, onForget: {
+                                        selectedPeer = peer
+                                        showForgetConfirmation = true
+                                    }, onBlock: {
+                                        if let userId = peer.discoveryInfo?["userId"] {
+                                            multipeerService.blockUser(userId: userId)
                                         }
-                                    }
-                                    .padding(.vertical, 4)
+                                    })
+                                    .environmentObject(multipeerService)
+                                    .padding(.vertical, 2)
                                 }
-                                .frame(height: 90)
                             } else {
                                 HStack {
                                     Spacer()
@@ -484,6 +482,134 @@ struct PeerItemView: View {
     }
     
     // Determine if peer state is actionable (can be tapped)
+    private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
+        return state == .discovered
+    }
+    
+    // Get appropriate icon for peer state
+    private func iconForState(_ state: MultipeerService.PeerState) -> String {
+        switch state {
+        case .discovered:
+            return "person.crop.circle.badge.plus"
+        case .connecting:
+            return "arrow.triangle.2.circlepath"
+        case .connected:
+            return "checkmark.circle"
+        case .disconnected:
+            return "x.circle"
+        case .invitationSent:
+            return "envelope"
+        default:
+            return "person.crop.circle.badge.questionmark"
+        }
+    }
+    
+    // Get appropriate color for peer state
+    private func colorForState(_ state: MultipeerService.PeerState) -> Color {
+        switch state {
+        case .discovered:
+            return .blue
+        case .connecting:
+            return .orange
+        case .connected:
+            return .green
+        case .disconnected:
+            return .red
+        case .invitationSent:
+            return .purple
+        default:
+            return .gray
+        }
+    }
+}
+
+// View for displaying a peer as a horizontal row with action buttons
+struct PeerRowView: View {
+    let peer: MultipeerService.PeerInfo
+    let action: () -> Void
+    let onForget: () -> Void
+    let onBlock: () -> Void
+    @EnvironmentObject var multipeerService: MultipeerService
+    
+    var body: some View {
+        HStack {
+            // Main content - this part will be clickable for "discovered" peers
+            HStack {
+                // Peer icon
+                Image(systemName: iconForState(peer.state))
+                    .font(.system(size: 18))
+                    .foregroundColor(colorForState(peer.state))
+                    .frame(width: 32, height: 32)
+                    .background(colorForState(peer.state).opacity(0.2))
+                    .clipShape(Circle())
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    // Peer name
+                    Text(peer.peerId.displayName)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    
+                    // Peer state
+                    Text(peer.state.rawValue)
+                        .font(.caption)
+                        .foregroundColor(colorForState(peer.state))
+                }
+                
+                Spacer()
+            }
+            .contentShape(Rectangle()) // Make the entire area tappable
+            .onTapGesture {
+                if isActionable(peer.state) {
+                    action()
+                }
+            }
+            
+            // Action buttons - these remain independently clickable
+            HStack(spacing: 8) {
+                // Forget button
+                Button(action: onForget) {
+                    Text("Forget")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(BorderlessButtonStyle())
+                
+                // Block button
+                Button(action: onBlock) {
+                    Text("Block")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(BorderlessButtonStyle())
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(
+                    isActionable(peer.state) ? colorForState(peer.state).opacity(0.3) : Color.secondary.opacity(0.3), 
+                    lineWidth: isActionable(peer.state) ? 1.5 : 1
+                )
+        )
+        .opacity(isActionable(peer.state) ? 1.0 : 0.85)
+    }
+    
+    // Determine if peer state is actionable (can be tapped to connect)
     private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
         return state == .discovered
     }
