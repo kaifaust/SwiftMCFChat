@@ -927,9 +927,21 @@ extension MultipeerService: MCSessionDelegate {
                         print("📱 Device placement: \(peerID.displayName) will appear in 'Other Devices' section")
                         self.messages.append(ChatMessage.systemMessage("Invitation declined by \(peerID.displayName)"))
                     } else if self.discoveredPeers[index].state == .connected {
-                        // Remove connected peers when they disconnect
-                        print("🗑️ Removing connected peer that disconnected: \(peerID.displayName)")
-                        self.discoveredPeers.remove(at: index)
+                        // When a connected peer disconnects, don't remove it - instead reset to discovered state
+                        // if it's known, or remove if unknown
+                        let userId = self.discoveredPeers[index].discoveryInfo?["userId"]
+                        let isKnown = userId != nil && self.knownPeers.contains(where: { $0.userId == userId })
+                        let isSyncEnabled = userId != nil && self.syncEnabledPeers.contains(userId!)
+                        
+                        if isKnown || isSyncEnabled {
+                            // Reset to discovered state for known/sync-enabled peers
+                            print("🔄 Resetting connected peer to discovered state: \(peerID.displayName)")
+                            self.discoveredPeers[index].state = .discovered
+                        } else {
+                            // Only remove unknown peers
+                            print("🗑️ Removing connected peer that disconnected: \(peerID.displayName)")
+                            self.discoveredPeers.remove(at: index)
+                        }
                     }
                 }
                 
@@ -1582,10 +1594,20 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                 // Special handling based on current peer state
                 switch currentState {
                 case .connected:
-                    // If connected, remove it when it goes offline
-                    print("🔄 Removing connected peer that went offline: \(peerID.displayName)")
-                    self.discoveredPeers.remove(at: index)
-                    self.messages.append(ChatMessage.systemMessage("Device \(peerID.displayName) is now offline"))
+                    // For connected peers, we should KEEP them in the discovered list so they can appear in
+                    // the UI with the appropriate state. The session delegate will properly handle
+                    // disconnection when it receives the state change notification.
+                    // 
+                    // This is critical for backgrounded devices since we need to maintain UI awareness of the peer
+                    // and be ready for when they return to foreground.
+                    print("ℹ️ Keeping connected peer that was lost: \(peerID.displayName)")
+                    // Update message only if peer is not actually still connected (could be app state changes)
+                    if !self.session.connectedPeers.contains(peerID) {
+                        print("🔄 Peer no longer appears in session's connected peers list")
+                        self.messages.append(ChatMessage.systemMessage("Lost connection to \(peerID.displayName)"))
+                    } else {
+                        print("ℹ️ Peer still appears in session's connected peers list - keeping without changes")
+                    }
                     
                 case .rejected:
                     // If rejected, keep it in the list 
