@@ -105,7 +105,8 @@ struct ContentView: View {
                     // Get peers for My Devices section - this includes:
                     // 1. Currently connected peers
                     // 2. Previously connected but now disconnected peers (new state)
-                    // 3. Known peers that have sync enabled (even if not currently connected)
+                    // 3. Known peers that have sync enabled (in any state except 'rejected')
+                    // 4. Known peers in connecting state or invitation sent state
                     let myDevicesPeers = multipeerService.discoveredPeers.filter { peer in
                         // Include connected peers
                         if peer.state == .connected {
@@ -117,10 +118,21 @@ struct ContentView: View {
                             return true
                         }
                         
-                        // Include discovered peers that have sync enabled
-                        if (peer.state == .discovered || peer.state == .disconnected), 
-                           let userId = peer.discoveryInfo?["userId"],
-                           multipeerService.isSyncEnabled(for: userId) {
+                        // Get the userId if available
+                        let userId = peer.discoveryInfo?["userId"]
+                        
+                        // Check if this is a known peer with sync enabled
+                        let isKnownSyncEnabled = userId != nil && 
+                                                multipeerService.isSyncEnabled(for: userId!)
+                        
+                        // Don't include rejected peers regardless of other conditions
+                        if peer.state == .rejected {
+                            return false
+                        }
+                        
+                        // Include all connection state peers (discovered, connecting, invitationSent)
+                        // that are known and have sync enabled
+                        if isKnownSyncEnabled {
                             return true
                         }
                         
@@ -162,7 +174,7 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
                         .padding(.top, 4)
                     
-                    // Get peers for Other Devices section - discovered peers that are not in My Devices
+                    // Get peers for Other Devices section - peers that are not in My Devices
                     let availablePeers = multipeerService.discoveredPeers.filter { peer in
                         // Exclude connected peers (already in My Devices)
                         if peer.state == .connected {
@@ -174,16 +186,23 @@ struct ContentView: View {
                             return false
                         }
                         
-                        // Exclude sync-enabled discovered peers (already in My Devices)
-                        if peer.state == .discovered, 
-                           let userId = peer.discoveryInfo?["userId"],
-                           multipeerService.isSyncEnabled(for: userId) {
+                        // Get the userId if available
+                        let userId = peer.discoveryInfo?["userId"]
+                        
+                        // Check if this is a known peer with sync enabled
+                        let isKnownSyncEnabled = userId != nil && 
+                                               multipeerService.isSyncEnabled(for: userId!)
+                        
+                        // Exclude ALL known sync-enabled peers (they go in My Devices)
+                        // except for rejected ones
+                        if isKnownSyncEnabled && peer.state != .rejected {
                             return false
                         }
                         
-                        // Include all other non-connected peers
-                        return peer.state == .discovered || peer.state == .invitationSent || 
-                               peer.state == .rejected || peer.state == .connecting
+                        // Include all other non-connected peers:
+                        // - All peers without sync enabled in any state
+                        // - Rejected peers (even if they were known/sync enabled)
+                        return true
                     }
                     
                     if !availablePeers.isEmpty {
@@ -361,10 +380,12 @@ struct ContentView: View {
             print("  - My Devices section includes:")
             print("    1. Connected peers (state == .connected)")
             print("    2. Disconnected peers - previously connected (state == .disconnected)")
-            print("    3. Discovered peers with sync enabled")
+            print("    3. Known peers with sync enabled in any state (including discovered, connecting, invitationSent)")
+            print("    4. Rejected peers are excluded, even if known and sync enabled")
             print("  - Other Devices section includes:")
-            print("    1. Discovered peers without sync enabled")
-            print("    2. Peers with invitationSent, rejected, or connecting states")
+            print("    1. All peers that are not known or don't have sync enabled")
+            print("    2. Rejected peers (even if they were known and sync enabled)")
+            print("    3. Any peer not in the My Devices category")
             
             // Register for invitation handling
             multipeerService.pendingInvitationHandler = { peerID, invitationHandler in
