@@ -111,15 +111,21 @@ struct ContentView: View {
                             
                             // Get peers for My Devices section - this includes:
                             // 1. Currently connected peers
-                            // 2. Known peers that have sync enabled (even if not currently connected)
+                            // 2. Previously connected but now disconnected peers (new state)
+                            // 3. Known peers that have sync enabled (even if not currently connected)
                             let myDevicesPeers = multipeerService.discoveredPeers.filter { peer in
                                 // Include connected peers
                                 if peer.state == .connected {
                                     return true
                                 }
                                 
+                                // Include disconnected peers (previously connected)
+                                if peer.state == .disconnected {
+                                    return true
+                                }
+                                
                                 // Include discovered peers that have sync enabled
-                                if peer.state == .discovered, 
+                                if (peer.state == .discovered || peer.state == .disconnected), 
                                    let userId = peer.discoveryInfo?["userId"],
                                    multipeerService.isSyncEnabled(for: userId) {
                                     return true
@@ -167,6 +173,11 @@ struct ContentView: View {
                             let availablePeers = multipeerService.discoveredPeers.filter { peer in
                                 // Exclude connected peers (already in My Devices)
                                 if peer.state == .connected {
+                                    return false
+                                }
+                                
+                                // Exclude disconnected peers (already in My Devices)
+                                if peer.state == .disconnected {
                                     return false
                                 }
                                 
@@ -360,7 +371,8 @@ struct ContentView: View {
             print("📋 Device categorization rules:")
             print("  - My Devices section includes:")
             print("    1. Connected peers (state == .connected)")
-            print("    2. Discovered peers with sync enabled")
+            print("    2. Disconnected peers - previously connected (state == .disconnected)")
+            print("    3. Discovered peers with sync enabled")
             print("  - Other Devices section includes:")
             print("    1. Discovered peers without sync enabled")
             print("    2. Peers with invitationSent, rejected, or connecting states")
@@ -439,8 +451,8 @@ struct ContentView: View {
     
     // Handle peer action based on its current state
     private func handlePeerAction(_ peer: MultipeerService.PeerInfo) {
-        if peer.state == .discovered || peer.state == .rejected {
-            // Invite peer (or retry invitation for rejected peers)
+        if peer.state == .discovered || peer.state == .rejected || peer.state == .disconnected {
+            // Invite peer (or retry invitation for rejected/disconnected peers)
             print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue)")
             multipeerService.invitePeer(peer)
         } else {
@@ -486,10 +498,22 @@ struct PeerItemView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             
-            // Peer state
-            Text(peer.state.rawValue)
-                .font(.caption2)
-                .foregroundColor(colorForState(peer.state))
+            // Peer state with nearby status for disconnected peers
+            if peer.state == .disconnected {
+                if peer.isNearby {
+                    Text("Not Connected, Nearby")
+                        .font(.caption2)
+                        .foregroundColor(colorForState(peer.state))
+                } else {
+                    Text("Not Connected")
+                        .font(.caption2)
+                        .foregroundColor(Color.gray)
+                }
+            } else {
+                Text(peer.state.rawValue)
+                    .font(.caption2)
+                    .foregroundColor(colorForState(peer.state))
+            }
         }
         .frame(width: 90)
         .padding(.vertical, 8)
@@ -531,7 +555,7 @@ struct PeerItemView: View {
     
     // Determine if peer state is actionable (can be tapped)
     private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
-        return state == .discovered
+        return state == .discovered || state == .disconnected || state == .rejected
     }
     
     // Get appropriate icon for peer state
@@ -543,6 +567,9 @@ struct PeerItemView: View {
             return "arrow.triangle.2.circlepath"
         case .connected:
             return "checkmark.circle"
+        case .disconnected:
+            // Use different icons based on whether peer is nearby or not
+            return peer.isNearby ? "person.crop.circle.badge.clock" : "person.crop.circle.badge.xmark"
         case .invitationSent:
             return "envelope"
         case .rejected:
@@ -561,6 +588,9 @@ struct PeerItemView: View {
             return .orange
         case .connected:
             return .green
+        case .disconnected:
+            // Use a more muted color for disconnected peers
+            return .gray.opacity(0.8)
         case .invitationSent:
             return .purple
         case .rejected:

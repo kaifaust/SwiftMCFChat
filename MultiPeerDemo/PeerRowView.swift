@@ -38,9 +38,22 @@ struct PeerRowView: View {
                     
                     // Peer state with sync status indicator
                     HStack(spacing: 4) {
-                        Text(peer.state.rawValue)
-                            .font(.caption)
-                            .foregroundColor(colorForState(peer.state))
+                        // Show status with nearby information for disconnected peers
+                        if peer.state == .disconnected {
+                            if peer.isNearby {
+                                Text("Not Connected, Nearby")
+                                    .font(.caption)
+                                    .foregroundColor(colorForState(peer.state))
+                            } else {
+                                Text("Not Connected")
+                                    .font(.caption)
+                                    .foregroundColor(Color.gray)
+                            }
+                        } else {
+                            Text(peer.state.rawValue)
+                                .font(.caption)
+                                .foregroundColor(colorForState(peer.state))
+                        }
                         
                         if let userId = peer.discoveryInfo?["userId"], 
                            multipeerService.isSyncEnabled(for: userId) {
@@ -110,8 +123,8 @@ struct PeerRowView: View {
     
     // Determine if peer state is actionable (can be tapped to connect)
     private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
-        // Discovered and rejected peers can be tapped to connect/retry
-        return state == .discovered || state == .rejected
+        // Discovered, disconnected and rejected peers can be tapped to connect/retry
+        return state == .discovered || state == .rejected || state == .disconnected
         // We don't make invitationSent peers actionable since clicking again would be redundant
     }
     
@@ -124,6 +137,9 @@ struct PeerRowView: View {
             return "arrow.triangle.2.circlepath"
         case .connected:
             return "checkmark.circle"
+        case .disconnected:
+            // Use different icons based on whether peer is nearby or not
+            return peer.isNearby ? "person.crop.circle.badge.clock" : "person.crop.circle.badge.xmark"
         case .invitationSent:
             return "envelope"
         case .rejected:
@@ -142,6 +158,9 @@ struct PeerRowView: View {
             return .orange
         case .connected:
             return .green
+        case .disconnected:
+            // Use a more muted color for disconnected peers
+            return .gray.opacity(0.8)
         case .invitationSent:
             return .purple
         case .rejected:

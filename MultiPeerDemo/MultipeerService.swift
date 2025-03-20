@@ -152,11 +152,18 @@ class MultipeerService: NSObject, ObservableObject {
     // Struct to track peer state information
     struct PeerInfo: Identifiable, Equatable {
         let id: UUID = UUID()
-        let peerId: MCPeerID
+        var peerId: MCPeerID  // Changed from let to var so we can update it
         var state: PeerState
         var discoveryInfo: [String: String]?
+        var isNearby: Bool = true // Default to true for newly discovered peers
         
         static func == (lhs: PeerInfo, rhs: PeerInfo) -> Bool {
+            // If we have user IDs, compare those instead of peer IDs
+            if let lhsUserId = lhs.discoveryInfo?["userId"],
+               let rhsUserId = rhs.discoveryInfo?["userId"] {
+                return lhsUserId == rhsUserId
+            }
+            // Fall back to comparing peer IDs if no user IDs are available
             return lhs.peerId == rhs.peerId
         }
     }
@@ -166,6 +173,7 @@ class MultipeerService: NSObject, ObservableObject {
         case discovered = "Discovered"
         case connecting = "Connecting..."
         case connected = "Connected"
+        case disconnected = "Not Connected" // Previously connected device that is now disconnected
         case invitationSent = "Invitation Sent"
         case invitationReceived = "Invitation Received"
         case rejected = "Invitation Declined"
@@ -677,9 +685,35 @@ class MultipeerService: NSObject, ObservableObject {
         stopHosting()
         stopBrowsing()
         
-        // Clear all discovered peers
+        // When MCF is turned off, don't completely clear discovered peers
+        // but update state for known peers
         DispatchQueue.main.async {
-            self.discoveredPeers.removeAll()
+            // Make a temporary copy to avoid mutation during iteration
+            let currentPeers = self.discoveredPeers
+            
+            // First mark all peers as disconnected and not nearby
+            for peer in currentPeers {
+                // Get the index in case the array is being modified by other operations
+                if let index = self.discoveredPeers.firstIndex(where: { $0.id == peer.id }) {
+                    // For connected and sync-enabled peers, set to disconnected
+                    if peer.state == PeerState.connected || 
+                       (peer.discoveryInfo?["userId"] != nil && 
+                        self.syncEnabledPeers.contains(peer.discoveryInfo?["userId"] ?? "")) {
+                        self.discoveredPeers[index].state = PeerState.disconnected
+                        self.discoveredPeers[index].isNearby = false
+                        print("🔌 Setting peer \(peer.peerId.displayName) to disconnected and not nearby")
+                    } else if peer.state == PeerState.disconnected {
+                        // Already disconnected peers just need to be marked as not nearby
+                        self.discoveredPeers[index].isNearby = false
+                        print("🔌 Setting disconnected peer \(peer.peerId.displayName) to not nearby")
+                    } else {
+                        // For non-connected, non-known peers, remove them
+                        self.discoveredPeers.remove(at: index)
+                        print("🔌 Removing transient peer: \(peer.peerId.displayName)")
+                    }
+                }
+            }
+            
             self.messages.append(ChatMessage.systemMessage("Disconnected from all peers"))
         }
         
@@ -740,16 +774,35 @@ class MultipeerService: NSObject, ObservableObject {
             // Remove from sync-enabled peers
             self.syncEnabledPeers.remove(userId)
             
+            // Update discovered peers
+            for index in (0..<self.discoveredPeers.count).reversed() {
+                if self.discoveredPeers[index].discoveryInfo?["userId"] == userId {
+                    let peer = self.discoveredPeers[index]
+                    
+                    if self.discoveredPeers[index].isNearby {
+                        // If the peer is nearby, we update its state to "discovered" instead of
+                        // removing it, so it will appear in the "Other Devices" section
+                        self.discoveredPeers[index].state = PeerState.discovered
+                        print("🔄 Peer \(peer.peerId.displayName) forgotten - moved to 'Other Devices' section")
+                    } else {
+                        // If not nearby, remove it completely
+                        self.discoveredPeers.remove(at: index)
+                        print("🔄 Peer \(peer.peerId.displayName) forgotten and removed (not nearby)")
+                    }
+                }
+            }
+            
             // Always disconnect active connections when forgetting
             self.disconnectUser(userId: userId)
             
             // Block if requested
             if andBlock {
                 self.blockedPeers.insert(userId)
-                // Only remove from discovered peers if we're blocking
+                // When blocking, always remove from discovered peers
                 self.discoveredPeers.removeAll(where: { 
                     $0.discoveryInfo?["userId"] == userId 
                 })
+                print("🚫 User blocked: \(userId)")
             }
             
             // Save changes
@@ -829,18 +882,36 @@ class MultipeerService: NSObject, ObservableObject {
     private func sendForgetRequest(forUserId userId: String) {
         // Capture session to avoid potential threading issues
         let currentSession = self.session
-        let currentPeers = currentSession.connectedPeers
+        
+        // Identify peers with the target userId
+        let targetPeers = currentSession.connectedPeers.filter { peer in
+            // Find the peer in our discoveredPeers list to get its userId
+            if let index = discoveredPeers.firstIndex(where: { $0.peerId == peer }),
+               let peerUserId = discoveredPeers[index].discoveryInfo?["userId"] {
+                // Only target peers with the matching userId
+                return peerUserId == userId
+            }
+            return false
+        }
         
         do {
-            let forgetRequest = ForgetDeviceRequest(userId: userId)
+            // Create a forget request using our own userId, so the remote device 
+            // knows which userId to forget (our userId, not its own)
+            let forgetRequest = ForgetDeviceRequest(userId: self.userId.uuidString)
             let forgetData = try JSONEncoder().encode(forgetRequest)
             
-            // Only attempt to send if we have connected peers
-            if !currentPeers.isEmpty {
-                try currentSession.send(forgetData, toPeers: currentPeers, with: .reliable)
-                print("📤 Sent forget request for userId \(userId) to \(currentPeers.count) peers")
+            // Only attempt to send if we have matching peers
+            if !targetPeers.isEmpty {
+                try currentSession.send(forgetData, toPeers: targetPeers, with: .reliable)
+                print("📤 Sent forget request for our userId to \(targetPeers.count) peers with userId \(userId)")
             } else {
-                print("ℹ️ No connected peers to send forget request to")
+                // Also try sending to all connected peers as a fallback
+                if !currentSession.connectedPeers.isEmpty {
+                    try currentSession.send(forgetData, toPeers: currentSession.connectedPeers, with: .reliable)
+                    print("📤 Sent forget request for our userId to all \(currentSession.connectedPeers.count) connected peers (fallback)")
+                } else {
+                    print("ℹ️ No connected peers to send forget request to")
+                }
             }
         } catch {
             print("❌ Failed to send forget request: \(error.localizedDescription)")
@@ -927,16 +998,18 @@ extension MultipeerService: MCSessionDelegate {
                         print("📱 Device placement: \(peerID.displayName) will appear in 'Other Devices' section")
                         self.messages.append(ChatMessage.systemMessage("Invitation declined by \(peerID.displayName)"))
                     } else if self.discoveredPeers[index].state == .connected {
-                        // When a connected peer disconnects, don't remove it - instead reset to discovered state
-                        // if it's known, or remove if unknown
+                        // When a connected peer disconnects, handle differently based on whether it's saved
                         let userId = self.discoveredPeers[index].discoveryInfo?["userId"]
                         let isKnown = userId != nil && self.knownPeers.contains(where: { $0.userId == userId })
                         let isSyncEnabled = userId != nil && self.syncEnabledPeers.contains(userId!)
                         
                         if isKnown || isSyncEnabled {
-                            // Reset to discovered state for known/sync-enabled peers
-                            print("🔄 Resetting connected peer to discovered state: \(peerID.displayName)")
-                            self.discoveredPeers[index].state = .discovered
+                            // Create a disconnected state for previously connected peers
+                            print("🔄 Setting previously connected peer to disconnected state: \(peerID.displayName)")
+                            self.discoveredPeers[index].state = .disconnected
+                            // Initially set as not nearby - the browser will update this if peer is actually nearby
+                            self.discoveredPeers[index].isNearby = false
+                            print("📡 Setting disconnected peer as not nearby by default: \(peerID.displayName)")
                         } else {
                             // Only remove unknown peers
                             print("🗑️ Removing connected peer that disconnected: \(peerID.displayName)")
@@ -1039,6 +1112,23 @@ extension MultipeerService: MCSessionDelegate {
                 // Remove sender from sync-enabled peers
                 self.syncEnabledPeers.remove(senderUserId)
                 
+                // Update the discovered peers list - mark as discovered instead of disconnected
+                for index in (0..<self.discoveredPeers.count).reversed() {
+                    if self.discoveredPeers[index].discoveryInfo?["userId"] == senderUserId {
+                        let peer = self.discoveredPeers[index]
+                        
+                        if self.discoveredPeers[index].isNearby {
+                            // If the peer is nearby, update its state to "discovered"
+                            self.discoveredPeers[index].state = PeerState.discovered
+                            print("🔄 Peer \(peer.peerId.displayName) forgotten via bidirectional request - set to 'discovered' state")
+                        } else {
+                            // If not nearby, remove it completely
+                            self.discoveredPeers.remove(at: index)
+                            print("🔄 Peer \(peer.peerId.displayName) forgotten and removed via bidirectional request (not nearby)")
+                        }
+                    }
+                }
+                
                 // Save these changes immediately
                 self.saveKnownPeers()
                 self.saveSyncEnabledPeers()
@@ -1068,15 +1158,8 @@ extension MultipeerService: MCSessionDelegate {
                 self.session.delegate = self
                 
                 // Remove all connected peers when session is recreated
-                self.discoveredPeers.removeAll(where: { $0.state == .connected })
+                self.discoveredPeers.removeAll(where: { $0.state == PeerState.connected })
                 self.connectedPeers = []
-                
-                // Also remove the sender from discoveredPeers completely to prevent re-discovery
-                if let senderUserId = senderUserId {
-                    self.discoveredPeers.removeAll(where: { 
-                        $0.discoveryInfo?["userId"] == senderUserId 
-                    })
-                }
                 
                 // Restart browsing and advertising
                 if wasBrowsing {
@@ -1087,16 +1170,30 @@ extension MultipeerService: MCSessionDelegate {
                 }
             }
             
+            // Handle the requested userId to forget
+            
             // Remove from known peers
             self.knownPeers.removeAll { $0.userId == userId }
             
-            // Also remove from sync-enabled peers to ensure it's fully forgotten
+            // Remove from sync-enabled peers to ensure it's fully forgotten
             self.syncEnabledPeers.remove(userId)
             
-            // Also remove from discovered peers list to prevent immediate re-discovery
-            self.discoveredPeers.removeAll(where: { 
-                $0.discoveryInfo?["userId"] == userId 
-            })
+            // Update the discovered peers list for the requested user to forget
+            for index in (0..<self.discoveredPeers.count).reversed() {
+                if self.discoveredPeers[index].discoveryInfo?["userId"] == userId {
+                    let peer = self.discoveredPeers[index]
+                    
+                    if self.discoveredPeers[index].isNearby {
+                        // If the peer is nearby, update its state to "discovered"
+                        self.discoveredPeers[index].state = PeerState.discovered
+                        print("🔄 Peer \(peer.peerId.displayName) forgotten via request - set to 'discovered' state")
+                    } else {
+                        // If not nearby, remove it completely
+                        self.discoveredPeers.remove(at: index)
+                        print("🔄 Peer \(peer.peerId.displayName) forgotten and removed via request (not nearby)")
+                    }
+                }
+            }
             
             // Don't block - that's a user preference
             
@@ -1540,19 +1637,56 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                 // Always update discovery info
                 let oldInfo = self.discoveredPeers[index].discoveryInfo
                 self.discoveredPeers[index].discoveryInfo = info
+                
+                // Always mark as nearby when found
+                self.discoveredPeers[index].isNearby = true
+                
                 print("🔄 Updated discovery info for existing peer: \(peerID.displayName)")
                 print("   Old info: \(oldInfo?.description ?? "none")")
                 print("   New info: \(info?.description ?? "none")")
-            } else {
-                // Add new peer to discovered list
-                self.discoveredPeers.append(PeerInfo(
-                    peerId: peerID,
-                    state: .discovered,
-                    discoveryInfo: info
-                ))
                 
-                print("➕ Added new peer to discovered list: \(peerID.displayName)")
-                self.messages.append(ChatMessage.systemMessage("Discovered new peer \(peerID.displayName)"))
+                if self.discoveredPeers[index].state == .disconnected {
+                    print("🔍 Disconnected peer is now nearby: \(peerID.displayName)")
+                }
+            } else {
+                // Before adding a new peer, check if we already know this user ID from another peer
+                // This handles the case where the app restarts and rediscovers a known peer with a new peerID object
+                var existingUserIdPeerIndex: Int? = nil
+                
+                if let userId = userId {
+                    existingUserIdPeerIndex = self.discoveredPeers.firstIndex(where: { 
+                        $0.discoveryInfo?["userId"] == userId 
+                    })
+                }
+                
+                if let existingIndex = existingUserIdPeerIndex, isKnownPeer {
+                    // We already have a peer with this userId, update it instead of adding a new one
+                    print("🔄 Found peer with existing userId: \(userId ?? "unknown"), updating instead of adding new")
+                    
+                    // Store the current state before updating
+                    let currentState = self.discoveredPeers[existingIndex].state
+                    
+                    // Update the existing peer with new peerID but maintain state if disconnected
+                    let updatedState = (currentState == PeerState.disconnected) ? PeerState.disconnected : PeerState.discovered
+                    self.discoveredPeers[existingIndex].peerId = peerID
+                    self.discoveredPeers[existingIndex].discoveryInfo = info
+                    self.discoveredPeers[existingIndex].state = updatedState
+                    self.discoveredPeers[existingIndex].isNearby = true
+                    
+                    print("🔄 Updated existing peer with userId \(userId ?? "unknown") to state: \(updatedState.rawValue)")
+                } else {
+                    // Add new peer to discovered list
+                    let initialState: PeerState = isKnownPeer ? PeerState.disconnected : PeerState.discovered
+                    self.discoveredPeers.append(PeerInfo(
+                        peerId: peerID,
+                        state: initialState,
+                        discoveryInfo: info,
+                        isNearby: true
+                    ))
+                    
+                    print("➕ Added new peer to discovered list: \(peerID.displayName) with state: \(initialState.rawValue)")
+                    self.messages.append(ChatMessage.systemMessage("Discovered new peer \(peerID.displayName)"))
+                }
                 
                 // If this is a known peer, update the last seen time
                 if let userId = userId, isKnownPeer {
@@ -1585,6 +1719,10 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                 let currentState = self.discoveredPeers[index].state
                 let userId = self.discoveredPeers[index].discoveryInfo?["userId"]
                 
+                // When a peer is lost, it's definitely not nearby anymore
+                self.discoveredPeers[index].isNearby = false
+                print("📡 Marking peer as not nearby: \(peerID.displayName)")
+                
                 // Log info about the lost peer to help understand why it's being removed
                 print("ℹ️ Lost peer details: peerID=\(peerID.displayName), state=\(currentState.rawValue), userId=\(userId ?? "unknown")")
                 print("ℹ️ Connected peers count: \(self.session.connectedPeers.count)")
@@ -1609,20 +1747,41 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                         print("ℹ️ Peer still appears in session's connected peers list - keeping without changes")
                     }
                     
+                case .disconnected:
+                    // Keep disconnected peers in the list but mark as not nearby
+                    self.discoveredPeers[index].isNearby = false
+                    print("🔄 Keeping disconnected peer in the list: \(peerID.displayName) (marked as not nearby)")
+                    
                 case .rejected:
                     // If rejected, keep it in the list 
                     // (important for retrying connections)
                     print("🔄 Keeping rejected peer in the list: \(peerID.displayName)")
                     
-                case .connecting, .invitationSent, .discovered, .invitationReceived:
+                case .discovered:
+                    // For discovered peers, if they're known or sync-enabled, mark as disconnected
+                    if let userId = userId,
+                       self.knownPeers.contains(where: { $0.userId == userId }) || 
+                       self.syncEnabledPeers.contains(userId) {
+                        self.discoveredPeers[index].state = PeerState.disconnected
+                        self.discoveredPeers[index].isNearby = false
+                        print("🔄 Changing discovered peer to disconnected state: \(peerID.displayName)")
+                    } else {
+                        // Only remove unknown discovered peers
+                        print("🔄 Removing unknown discovered peer: \(peerID.displayName)")
+                        self.discoveredPeers.remove(at: index)
+                    }
+                    
+                case .connecting, .invitationSent, .invitationReceived:
                     // For transient states, only remove if not in session.connectedPeers
                     if !self.session.connectedPeers.contains(peerID) {
                         // Check if this is a known peer we should keep
                         if let userId = userId,
-                           self.knownPeers.contains(where: { $0.userId == userId }) {
-                            // Known peers should go back to discovered state so they can be reconnected
-                            self.discoveredPeers[index].state = .discovered
-                            print("🔄 Resetting known peer to discovered state: \(peerID.displayName)")
+                           (self.knownPeers.contains(where: { $0.userId == userId }) || 
+                            self.syncEnabledPeers.contains(userId)) {
+                            // For known peers, mark as disconnected when lost
+                            self.discoveredPeers[index].state = PeerState.disconnected
+                            self.discoveredPeers[index].isNearby = false
+                            print("🔄 Changing transient state peer to disconnected state: \(peerID.displayName)")
                         } else {
                             // Unknown peer in transient state, safe to remove
                             print("🔄 Removing unknown peer: \(peerID.displayName) (not in known peers list)")
