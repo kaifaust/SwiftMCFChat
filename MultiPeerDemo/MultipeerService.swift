@@ -367,22 +367,38 @@ class MultipeerService: NSObject, ObservableObject {
             
             if let index = self.discoveredPeers.firstIndex(where: { $0.peerId == peerId }) {
                 oldState = self.discoveredPeers[index].state
+                let wasNearby = self.discoveredPeers[index].isNearby
                 
                 // Only log if state actually changed
                 if oldState != state {
                     print("🔄 Peer state change: \(peerId.displayName) changed from \(oldState!.rawValue) to \(state.rawValue). Reason: \(reason)")
                     self.discoveredPeers[index].state = state
+                    
+                    // When changing to connecting or connected state, peer must be nearby
+                    if state == .connecting || state == .connected {
+                        if !wasNearby {
+                            self.discoveredPeers[index].isNearby = true
+                            print("📡 Marking peer as nearby due to connection state: \(peerId.displayName)")
+                        }
+                    }
                 }
             } else {
                 // Add the peer if it doesn't exist yet (for proactive approaches)
                 oldState = nil
                 
+                // When adding a new peer with connecting or connected state, it's definitely nearby
+                let isNearby = (state == .connecting || state == .connected)
+                
                 self.discoveredPeers.append(PeerInfo(
                     peerId: peerId,
-                    state: state
+                    state: state,
+                    isNearby: isNearby
                 ))
                 
                 print("➕ New peer added: \(peerId.displayName) with initial state \(state.rawValue). Reason: \(reason)")
+                if isNearby {
+                    print("📡 New peer marked as nearby due to connection state")
+                }
             }
             
             // Log section placement information
@@ -755,7 +771,10 @@ class MultipeerService: NSObject, ObservableObject {
     
     /// Check if we should auto-connect to a user
     func shouldAutoConnect(to userId: String) -> Bool {
-        return false // This app doesn't support auto-connect
+        // Auto-connect only to mutual known peers (peers that are in knownPeers and have sync enabled)
+        return !isUserBlocked(userId) && 
+               knownPeers.contains(where: { $0.userId == userId }) && 
+               syncEnabledPeers.contains(userId)
     }
     
     /// Forget a device - remove from known peers, sync-enabled peers, and optionally block
@@ -1555,7 +1574,34 @@ extension MultipeerService: MCNearbyServiceAdvertiserDelegate {
             return
         }
         
-        // Store the invitation handler for later use when user accepts/declines
+        // Check if we should auto-accept based on mutual knowledge
+        if let userId = senderInfo["userId"], shouldAutoConnect(to: userId) {
+            // A peer sending an invitation is definitely nearby - set its state
+            if let peerIndex = discoveredPeers.firstIndex(where: { $0.peerId == peerID }) {
+                // Always update isNearby for peers sending invitations
+                discoveredPeers[peerIndex].isNearby = true
+                print("📡 Marking peer as nearby due to received invitation: \(peerID.displayName)")
+            }
+            
+            // Auto-accept since a peer that sends an invitation is definitely nearby
+            print("🤝 Auto-accepting invitation from known peer: \(peerID.displayName) with userId: \(userId)")
+            
+            // Update peer state in discovered peers list
+            updatePeerState(peerID, to: .connecting, reason: "Auto-accepting invitation from known peer")
+            
+            DispatchQueue.main.async {
+                self.messages.append(ChatMessage.systemMessage("Auto-accepting invitation from known peer \(peerID.displayName)"))
+            }
+            
+            // We MUST NOT store the invitation handler for auto-accepted invitations
+            // Otherwise it will cause duplicate accept attempts
+            
+            // Accept the invitation
+            invitationHandler(true, session)
+            return
+        }
+        
+        // For peers we don't auto-connect with, store the invitation handler for later use
         pendingInvitations[peerID] = invitationHandler
         
         // Check if this peer is already in our list
@@ -1564,14 +1610,22 @@ extension MultipeerService: MCNearbyServiceAdvertiserDelegate {
                 // Update existing peer - keep as discovered so it appears in Available list
                 let oldState = self.discoveredPeers[index].state
                 self.discoveredPeers[index].state = .discovered
+                
+                // IMPORTANT: Always mark a peer sending an invitation as nearby
+                self.discoveredPeers[index].isNearby = true
+                
                 print("🔄 Peer state updated: \(peerID.displayName) from \(oldState.rawValue) to discovered. Reason: Received invitation, making peer available for connection")
+                print("📡 Marking peer as nearby due to received invitation: \(peerID.displayName)")
             } else {
                 // Add new peer with discovered state
                 self.discoveredPeers.append(PeerInfo(
                     peerId: peerID,
-                    state: .discovered
+                    state: .discovered,
+                    discoveryInfo: senderInfo.isEmpty ? nil : senderInfo,
+                    isNearby: true
                 ))
                 print("➕ Added peer to discovered list: \(peerID.displayName) (Status: discovered, from invitation)")
+                print("📡 New peer marked as nearby due to received invitation")
             }
             
             self.messages.append(ChatMessage.systemMessage("Received invitation from \(peerID.displayName)"))
@@ -1647,6 +1701,12 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                 
                 if self.discoveredPeers[index].state == .disconnected {
                     print("🔍 Disconnected peer is now nearby: \(peerID.displayName)")
+                    
+                    // Check if this is a peer we should auto-connect to
+                    if let userId = userId, self.shouldAutoConnect(to: userId) {
+                        print("🤝 Auto-connecting to previously known peer that is now nearby: \(peerID.displayName)")
+                        self.invitePeer(self.discoveredPeers[index])
+                    }
                 }
             } else {
                 // Before adding a new peer, check if we already know this user ID from another peer
@@ -1674,18 +1734,31 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
                     self.discoveredPeers[existingIndex].isNearby = true
                     
                     print("🔄 Updated existing peer with userId \(userId ?? "unknown") to state: \(updatedState.rawValue)")
+                    
+                    // If this is a peer we should auto-connect to and was previously disconnected
+                    if updatedState == .disconnected, let userId = userId, self.shouldAutoConnect(to: userId) {
+                        print("🤝 Auto-connecting to previously known peer with new peerID: \(peerID.displayName)")
+                        self.invitePeer(self.discoveredPeers[existingIndex])
+                    }
                 } else {
                     // Add new peer to discovered list
                     let initialState: PeerState = isKnownPeer ? PeerState.disconnected : PeerState.discovered
-                    self.discoveredPeers.append(PeerInfo(
+                    let newPeerInfo = PeerInfo(
                         peerId: peerID,
                         state: initialState,
                         discoveryInfo: info,
                         isNearby: true
-                    ))
+                    )
+                    self.discoveredPeers.append(newPeerInfo)
                     
                     print("➕ Added new peer to discovered list: \(peerID.displayName) with state: \(initialState.rawValue)")
                     self.messages.append(ChatMessage.systemMessage("Discovered new peer \(peerID.displayName)"))
+                    
+                    // If this is a known peer with disconnected state, check if we should auto-connect
+                    if initialState == .disconnected, let userId = userId, self.shouldAutoConnect(to: userId) {
+                        print("🤝 Auto-connecting to newly added known peer: \(peerID.displayName)")
+                        self.invitePeer(newPeerInfo)
+                    }
                 }
                 
                 // If this is a known peer, update the last seen time
