@@ -151,6 +151,11 @@ struct PeerRowView: View {
     
     // Get appropriate color for peer state
     private func colorForState(_ state: MultipeerService.PeerState) -> Color {
+        return getStateColor(state)
+    }
+    
+    // Helper to avoid complex type-checking
+    private func getStateColor(_ state: MultipeerService.PeerState) -> Color {
         switch state {
         case .discovered:
             return .blue

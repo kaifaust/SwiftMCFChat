@@ -26,6 +26,73 @@ struct ContentView: View {
     @State private var selectedPeer: MultipeerService.PeerInfo?
     @State private var showForgetConfirmation = false
     
+    // Helper methods to simplify complex expressions for Swift type-checking
+    private func getMyDevicesPeers() -> [MultipeerService.PeerInfo] {
+        return multipeerService.discoveredPeers.filter { peer in
+            // Include connected peers
+            if peer.state == MultipeerService.PeerState.connected {
+                return true
+            }
+            
+            // Include disconnected peers (previously connected)
+            if peer.state == MultipeerService.PeerState.disconnected {
+                return true
+            }
+            
+            // Get the userId if available
+            let userId = peer.discoveryInfo?["userId"]
+            
+            // Check if this is a known peer with sync enabled
+            let isKnownSyncEnabled = userId != nil && 
+                                    multipeerService.isSyncEnabled(for: userId!)
+            
+            // Don't include rejected peers regardless of other conditions
+            if peer.state == MultipeerService.PeerState.rejected {
+                return false
+            }
+            
+            // Include all connection state peers (discovered, connecting, invitationSent)
+            // that are known and have sync enabled
+            if isKnownSyncEnabled {
+                return true
+            }
+            
+            return false
+        }
+    }
+    
+    private func getAvailableDevicesPeers() -> [MultipeerService.PeerInfo] {
+        return multipeerService.discoveredPeers.filter { peer in
+            // Exclude connected peers (already in My Devices)
+            if peer.state == MultipeerService.PeerState.connected {
+                return false
+            }
+            
+            // Exclude disconnected peers (already in My Devices)
+            if peer.state == MultipeerService.PeerState.disconnected {
+                return false
+            }
+            
+            // Get the userId if available
+            let userId = peer.discoveryInfo?["userId"]
+            
+            // Check if this is a known peer with sync enabled
+            let isKnownSyncEnabled = userId != nil && 
+                                   multipeerService.isSyncEnabled(for: userId!)
+            
+            // Exclude ALL known sync-enabled peers (they go in My Devices)
+            // except for rejected ones
+            if isKnownSyncEnabled && peer.state != MultipeerService.PeerState.rejected {
+                return false
+            }
+            
+            // Include all other non-connected peers:
+            // - All peers without sync enabled in any state
+            // - Rejected peers (even if they were known/sync enabled)
+            return true
+        }
+    }
+    
     var body: some View {
         VStack {
             // Header with more status information
@@ -107,37 +174,8 @@ struct ContentView: View {
                     // 2. Previously connected but now disconnected peers (new state)
                     // 3. Known peers that have sync enabled (in any state except 'rejected')
                     // 4. Known peers in connecting state or invitation sent state
-                    let myDevicesPeers = multipeerService.discoveredPeers.filter { peer in
-                        // Include connected peers
-                        if peer.state == .connected {
-                            return true
-                        }
-                        
-                        // Include disconnected peers (previously connected)
-                        if peer.state == .disconnected {
-                            return true
-                        }
-                        
-                        // Get the userId if available
-                        let userId = peer.discoveryInfo?["userId"]
-                        
-                        // Check if this is a known peer with sync enabled
-                        let isKnownSyncEnabled = userId != nil && 
-                                                multipeerService.isSyncEnabled(for: userId!)
-                        
-                        // Don't include rejected peers regardless of other conditions
-                        if peer.state == .rejected {
-                            return false
-                        }
-                        
-                        // Include all connection state peers (discovered, connecting, invitationSent)
-                        // that are known and have sync enabled
-                        if isKnownSyncEnabled {
-                            return true
-                        }
-                        
-                        return false
-                    }
+                    // Extract into a method to avoid Swift type-checking complexity
+                    let myDevicesPeers = getMyDevicesPeers()
                     
                     if !myDevicesPeers.isEmpty {
                         ForEach(myDevicesPeers) { peer in
@@ -175,35 +213,7 @@ struct ContentView: View {
                         .padding(.top, 4)
                     
                     // Get peers for Other Devices section - peers that are not in My Devices
-                    let availablePeers = multipeerService.discoveredPeers.filter { peer in
-                        // Exclude connected peers (already in My Devices)
-                        if peer.state == .connected {
-                            return false
-                        }
-                        
-                        // Exclude disconnected peers (already in My Devices)
-                        if peer.state == .disconnected {
-                            return false
-                        }
-                        
-                        // Get the userId if available
-                        let userId = peer.discoveryInfo?["userId"]
-                        
-                        // Check if this is a known peer with sync enabled
-                        let isKnownSyncEnabled = userId != nil && 
-                                               multipeerService.isSyncEnabled(for: userId!)
-                        
-                        // Exclude ALL known sync-enabled peers (they go in My Devices)
-                        // except for rejected ones
-                        if isKnownSyncEnabled && peer.state != .rejected {
-                            return false
-                        }
-                        
-                        // Include all other non-connected peers:
-                        // - All peers without sync enabled in any state
-                        // - Rejected peers (even if they were known/sync enabled)
-                        return true
-                    }
+                    let availablePeers = getAvailableDevicesPeers()
                     
                     if !availablePeers.isEmpty {
                         ForEach(availablePeers) { peer in
@@ -394,7 +404,7 @@ struct ContentView: View {
                 if let existing = multipeerService.discoveredPeers.first(where: { $0.peerId == peerID }) {
                     peerInfo = existing
                 } else {
-                    peerInfo = MultipeerService.PeerInfo(peerId: peerID, state: .discovered)
+                    peerInfo = MultipeerService.PeerInfo(peerId: peerID, state: MultipeerService.PeerState.discovered)
                 }
                 
                 // Show the connection request dialog immediately
@@ -461,17 +471,17 @@ struct ContentView: View {
     
     // Handle peer action based on its current state
     private func handlePeerAction(_ peer: MultipeerService.PeerInfo) {
-        if peer.state == .discovered || peer.state == .rejected || peer.state == .disconnected {
+        if peer.state == MultipeerService.PeerState.discovered || peer.state == MultipeerService.PeerState.rejected || peer.state == MultipeerService.PeerState.disconnected {
             // Invite peer (or retry invitation for rejected/disconnected peers)
             print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue)")
             multipeerService.invitePeer(peer)
         } else {
             // Log why we're not taking action for other states
-            if peer.state == .invitationSent {
+            if peer.state == MultipeerService.PeerState.invitationSent {
                 print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: invitation already sent")
-            } else if peer.state == .connecting {
+            } else if peer.state == MultipeerService.PeerState.connecting {
                 print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: already connecting")
-            } else if peer.state == .connected {
+            } else if peer.state == MultipeerService.PeerState.connected {
                 print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: already connected")
             }
         }
@@ -509,7 +519,7 @@ struct PeerItemView: View {
                 .truncationMode(.middle)
             
             // Peer state with nearby status for disconnected peers
-            if peer.state == .disconnected {
+            if peer.state == MultipeerService.PeerState.disconnected {
                 if peer.isNearby {
                     Text("Not Connected, Nearby")
                         .font(.caption2)
@@ -541,8 +551,9 @@ struct PeerItemView: View {
             }
         }
         .contextMenu {
-            if peer.state == .connected || peer.state == .discovered {
-                if let userId = peer.discoveryInfo?["userId"] {
+            if peer.state == MultipeerService.PeerState.connected || peer.state == MultipeerService.PeerState.discovered {
+                // Check if peer has a userId (needed for the context menu actions)
+                if peer.discoveryInfo?["userId"] != nil {
                     Button(action: {
                         if let onContextMenu = onContextMenu {
                             onContextMenu()
@@ -565,24 +576,26 @@ struct PeerItemView: View {
     
     // Determine if peer state is actionable (can be tapped)
     private func isActionable(_ state: MultipeerService.PeerState) -> Bool {
-        return state == .discovered || state == .disconnected || state == .rejected
+        return state == MultipeerService.PeerState.discovered || 
+               state == MultipeerService.PeerState.disconnected || 
+               state == MultipeerService.PeerState.rejected
     }
     
     // Get appropriate icon for peer state
     private func iconForState(_ state: MultipeerService.PeerState) -> String {
         switch state {
-        case .discovered:
+        case MultipeerService.PeerState.discovered:
             return "person.crop.circle.badge.plus"
-        case .connecting:
+        case MultipeerService.PeerState.connecting:
             return "arrow.triangle.2.circlepath"
-        case .connected:
+        case MultipeerService.PeerState.connected:
             return "checkmark.circle"
-        case .disconnected:
+        case MultipeerService.PeerState.disconnected:
             // Use different icons based on whether peer is nearby or not
             return peer.isNearby ? "person.crop.circle.badge.clock" : "person.crop.circle.badge.xmark"
-        case .invitationSent:
+        case MultipeerService.PeerState.invitationSent:
             return "envelope"
-        case .rejected:
+        case MultipeerService.PeerState.rejected:
             return "xmark.circle"
         default:
             return "person.crop.circle.badge.questionmark"
@@ -592,18 +605,18 @@ struct PeerItemView: View {
     // Get appropriate color for peer state
     private func colorForState(_ state: MultipeerService.PeerState) -> Color {
         switch state {
-        case .discovered:
+        case MultipeerService.PeerState.discovered:
             return .blue
-        case .connecting:
+        case MultipeerService.PeerState.connecting:
             return .orange
-        case .connected:
+        case MultipeerService.PeerState.connected:
             return .green
-        case .disconnected:
+        case MultipeerService.PeerState.disconnected:
             // Use a more muted color for disconnected peers
             return .gray.opacity(0.8)
-        case .invitationSent:
+        case MultipeerService.PeerState.invitationSent:
             return .purple
-        case .rejected:
+        case MultipeerService.PeerState.rejected:
             return .orange
         default:
             return .gray

@@ -16,11 +16,7 @@ import AppKit
 
 // MARK: - MCSessionDelegate
 extension MultipeerService: MCSessionDelegate {
-    // SyncDecision and ForgetDeviceRequest are nested within this extension
-    struct SyncDecision: Codable {
-        var type = "sync_decision"
-        let useRemote: Bool // true = sender is using receiver's history, false = sender is keeping their own history
-    }
+    // No need for typealias since SyncDecision is defined in the main class
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         print("🔄 Peer \(peerID.displayName) state changed to: \(state.rawValue)")
         
@@ -105,43 +101,76 @@ extension MultipeerService: MCSessionDelegate {
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         print("📥 Received data from: \(peerID.displayName) (\(data.count) bytes)")
         
-        // 1. Try to decode as a ForgetDeviceRequest (highest priority)
+        // Process received data in order of priority
+        if let messageType = getMessageType(from: data) {
+            switch messageType {
+            case "forget_device":
+                handleForgetDeviceRequest(data: data, fromPeer: peerID)
+            case "sync_decision":
+                handleSyncDecision(data: data, fromPeer: peerID)
+            case "sync":
+                handleMessageSync(data: data, fromPeer: peerID)
+            default:
+                handleChatMessage(data: data, fromPeer: peerID)
+            }
+        } else {
+            handleChatMessage(data: data, fromPeer: peerID)
+        }
+    }
+    
+    // MARK: - Message Processing Helpers
+    
+    /// Get the message type from data if possible
+    func getMessageType(from data: Data) -> String? {
+        // Try to decode just the type field to determine message type
+        struct MessageType: Codable {
+            let type: String
+        }
+        
+        do {
+            let messageType = try JSONDecoder().decode(MessageType.self, from: data)
+            return messageType.type
+        } catch {
+            return nil
+        }
+    }
+    
+    /// Handle a forget device request
+    private func handleForgetDeviceRequest(data: Data, fromPeer peerID: MCPeerID) {
         do {
             let forgetRequest = try JSONDecoder().decode(ForgetDeviceRequest.self, from: data)
-            if forgetRequest.type == "forget_device" {
-                print("🧹 Received forget device request for userId: \(forgetRequest.userId)")
-                handleForgetDeviceRequest(userId: forgetRequest.userId, fromPeer: peerID)
-                return
-            }
+            print("🧹 Received forget device request for userId: \(forgetRequest.userId)")
+            handleForgetDeviceRequest(userId: forgetRequest.userId, fromPeer: peerID)
         } catch {
-            // Not a forget device request, continue
+            print("❌ Failed to decode forget device request: \(error.localizedDescription)")
         }
-        
-        // 2. Try to decode as a SyncDecision 
+    }
+    
+    /// Handle a sync decision
+    private func handleSyncDecision(data: Data, fromPeer peerID: MCPeerID) {
         do {
-            let syncDecision = try JSONDecoder().decode(SyncDecision.self, from: data)
-            if syncDecision.type == "sync_decision" {
-                print("🔄 Received sync decision from \(peerID.displayName): \(syncDecision.useRemote ? "they're using our history" : "they're keeping their history")")
-                handleSyncDecision(theyUseRemote: syncDecision.useRemote, fromPeer: peerID)
-                return
-            }
+            // Explicitly use MultipeerService.SyncDecision to avoid ambiguity
+            let syncDecision = try JSONDecoder().decode(MultipeerService.SyncDecision.self, from: data)
+            print("🔄 Received sync decision from \(peerID.displayName): \(syncDecision.useRemote ? "they're using our history" : "they're keeping their history")")
+            handleSyncDecision(theyUseRemote: syncDecision.useRemote, fromPeer: peerID)
         } catch {
-            // Not a sync decision, continue
+            print("❌ Failed to decode sync decision: \(error.localizedDescription)")
         }
-        
-        // 3. Try to decode as a SyncMessage
+    }
+    
+    /// Handle a message sync
+    private func handleMessageSync(data: Data, fromPeer peerID: MCPeerID) {
         do {
             let syncMessage = try JSONDecoder().decode(SyncMessage.self, from: data)
-            if syncMessage.type == "sync" {
-                print("🔄 Received sync message with \(syncMessage.messages.count) messages")
-                handleMessageSync(messages: syncMessage.messages, fromPeer: peerID)
-                return
-            }
+            print("🔄 Received sync message with \(syncMessage.messages.count) messages")
+            handleMessageSync(messages: syncMessage.messages, fromPeer: peerID)
         } catch {
-            // Not a sync message, continue with regular message handling
+            print("❌ Failed to decode sync message: \(error.localizedDescription)")
         }
-        
-        // 4. Try to decode the data as a regular ChatMessage
+    }
+    
+    /// Handle a regular chat message
+    private func handleChatMessage(data: Data, fromPeer peerID: MCPeerID) {
         do {
             let receivedMessage = try JSONDecoder().decode(ChatMessage.self, from: data)
             print("📩 Message content: \(receivedMessage.content) from \(receivedMessage.senderName)")
@@ -417,106 +446,14 @@ extension MultipeerService: MCSessionDelegate {
             
             // Manual save once after all changes
             if !self.isInitialLoad {
-                self.saveMessages()
+                saveMessages()
             }
         } else {
             print("ℹ️ No new messages from sync")
         }
     }
     
-    // Resolve message sync conflict by choosing either local or remote messages
-    func resolveMessageSyncConflict(useRemote: Bool) {
-        guard hasPendingSyncDecision, let peerID = pendingSyncPeer else {
-            print("❌ No sync conflict to resolve")
-            return
-        }
-        
-        guard let remoteMessages = pendingSyncs[peerID] else {
-            print("❌ Cannot find remote messages for \(peerID.displayName)")
-            return
-        }
-        
-        // First, send the decision to the other device
-        sendSyncDecision(useRemote: useRemote, toPeer: peerID)
-        
-        // Then apply the decision locally
-        applySyncDecision(useRemote: useRemote, peerID: peerID, remoteMessages: remoteMessages)
-    }
-    
-    // Send the sync decision to the other device
-    private func sendSyncDecision(useRemote: Bool, toPeer peerID: MCPeerID) {
-        // Create a decision message
-        // If we choose useRemote=true (we want to use their messages), we send "useRemote=true" 
-        // so they know we're adopting their messages and they should keep their history
-        // If we choose useRemote=false (we want to keep our messages), we send "useRemote=false"
-        // so they know we're keeping our history and they should adopt our messages
-        let decision = SyncDecision(useRemote: useRemote)
-        
-        do {
-            let decisionData = try JSONEncoder().encode(decision)
-            do {
-                try self.session.send(decisionData, toPeers: [peerID], with: MCSessionSendDataMode.reliable)
-            } catch {
-                print("Error sending decision: \(error)")
-            }
-            print("📤 Sent sync decision (\(useRemote ? "use remote" : "keep local")) to \(peerID.displayName)")
-        } catch {
-            print("❌ Failed to send sync decision: \(error.localizedDescription)")
-        }
-    }
-    
-    // Apply the sync decision locally
-    private func applySyncDecision(useRemote: Bool, peerID: MCPeerID, remoteMessages: [ChatMessage]) {
-        if useRemote {
-            // Replace our user messages with the remote ones, but keep our system messages
-            print("🔄 Using remote message history from \(peerID.displayName)")
-            DispatchQueue.main.async {
-                // Temporarily disable saving during batch operations
-                let wasInitialLoad = self.isInitialLoad
-                self.isInitialLoad = true
-                
-                // Keep only our system messages
-                let ourSystemMessages = self.messages.filter { $0.isSystemMessage }
-                
-                // Get user messages from remote
-                let remoteUserMessages = remoteMessages.filter { !$0.isSystemMessage }
-                
-                // Combine and sort
-                self.messages = ourSystemMessages + remoteUserMessages
-                self.messages.sort(by: { $0.timestamp < $1.timestamp })
-                
-                // Add info message
-                self.messages.append(ChatMessage.systemMessage("Adopted message history from \(peerID.displayName)"))
-                
-                // Restore previous state and trigger a single save
-                self.isInitialLoad = wasInitialLoad
-                if !self.isInitialLoad {
-                    self.saveMessages()
-                }
-            }
-        } else {
-            // Keep our message history and add a system message
-            print("🔄 Keeping local message history")
-            DispatchQueue.main.async {
-                // Temporarily disable saving
-                let wasInitialLoad = self.isInitialLoad
-                self.isInitialLoad = true
-                
-                self.messages.append(ChatMessage.systemMessage("Kept local message history"))
-                
-                // Restore previous state and trigger a single save
-                self.isInitialLoad = wasInitialLoad
-                if !self.isInitialLoad {
-                    self.saveMessages()
-                }
-            }
-        }
-        
-        // Clear the pending sync
-        pendingSyncs.removeValue(forKey: peerID)
-        pendingSyncPeer = nil
-        hasPendingSyncDecision = false
-    }
+    // MARK: - Required Session Delegate Methods
     
     // Protocol required methods - not used in this demo but implemented with proper logging
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {
@@ -552,44 +489,5 @@ extension MultipeerService: MCSessionDelegate {
         // Auto-accept all certificates in this demo app
         print("🔐 Received certificate from \(peerID.displayName) - auto-accepting")
         certificateHandler(true)
-    }
-    
-    // MARK: - App State Handling
-    
-    // Call this method when app becomes active
-    func handleAppDidBecomeActive() {
-        print("🔄 App became active - resuming connections")
-        
-        // The framework automatically resumes advertising and browsing,
-        // but we need to log our state to help with debugging
-        
-        // Log current state
-        print("📊 Current state:")
-        print("   isHosting: \(isHosting)")
-        print("   isBrowsing: \(isBrowsing)") 
-        let connectedPeerIDs = self.sessionConnectedPeers
-        print("   connectedPeers: \(connectedPeerIDs.count)")
-        print("   discoveredPeers: \(discoveredPeers.count)")
-        
-        // Session will have been disconnected when app was backgrounded
-        // Log all our discovered peers
-        print("📋 Current discovered peers after becoming active:")
-        for (index, peer) in discoveredPeers.enumerated() {
-            print("   \(index): \(peer.peerId.displayName), state: \(peer.state.rawValue), userId: \(peer.discoveryInfo?["userId"] ?? "unknown")")
-        }
-    }
-    
-    // Call this method when app enters background
-    func handleAppDidEnterBackground() {
-        print("⏸️ App entered background - framework will disconnect session")
-        
-        // Framework automatically stops advertising, browsing, and disconnects session
-        // Just log our current state for debugging
-        print("📊 State before backgrounding:")
-        print("   isHosting: \(isHosting)")
-        print("   isBrowsing: \(isBrowsing)")
-        let connectedPeerIDs = self.sessionConnectedPeers
-        print("   connectedPeers: \(connectedPeerIDs.count)")
-        print("   discoveredPeers: \(discoveredPeers.count)")
     }
 }
