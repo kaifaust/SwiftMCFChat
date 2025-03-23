@@ -17,7 +17,6 @@ struct ContentView: View {
     @State private var messageText = ""
     @State private var isSyncEnabled = true
     @State private var showInfoAlert = false
-    // Removed showPeersList since device list is now always visible
     @State private var showSyncConflictAlert = false
     @State private var showClearConfirmation = false
     @State private var showConnectionRequestAlert = false
@@ -25,73 +24,7 @@ struct ContentView: View {
     @State private var showPeerContextMenu = false
     @State private var selectedPeer: MultipeerService.PeerInfo?
     @State private var showForgetConfirmation = false
-    
-    // Helper methods to simplify complex expressions for Swift type-checking
-    private func getMyDevicesPeers() -> [MultipeerService.PeerInfo] {
-        return multipeerService.discoveredPeers.filter { peer in
-            // Include connected peers
-            if peer.state == MultipeerService.PeerState.connected {
-                return true
-            }
-            
-            // Include disconnected peers (previously connected)
-            if peer.state == MultipeerService.PeerState.disconnected {
-                return true
-            }
-            
-            // Get the userId if available
-            let userId = peer.discoveryInfo?["userId"]
-            
-            // Check if this is a known peer with sync enabled
-            let isKnownSyncEnabled = userId != nil && 
-                                    multipeerService.isSyncEnabled(for: userId!)
-            
-            // Don't include rejected peers regardless of other conditions
-            if peer.state == MultipeerService.PeerState.rejected {
-                return false
-            }
-            
-            // Include all connection state peers (discovered, connecting, invitationSent)
-            // that are known and have sync enabled
-            if isKnownSyncEnabled {
-                return true
-            }
-            
-            return false
-        }
-    }
-    
-    private func getAvailableDevicesPeers() -> [MultipeerService.PeerInfo] {
-        return multipeerService.discoveredPeers.filter { peer in
-            // Exclude connected peers (already in My Devices)
-            if peer.state == MultipeerService.PeerState.connected {
-                return false
-            }
-            
-            // Exclude disconnected peers (already in My Devices)
-            if peer.state == MultipeerService.PeerState.disconnected {
-                return false
-            }
-            
-            // Get the userId if available
-            let userId = peer.discoveryInfo?["userId"]
-            
-            // Check if this is a known peer with sync enabled
-            let isKnownSyncEnabled = userId != nil && 
-                                   multipeerService.isSyncEnabled(for: userId!)
-            
-            // Exclude ALL known sync-enabled peers (they go in My Devices)
-            // except for rejected ones
-            if isKnownSyncEnabled && peer.state != MultipeerService.PeerState.rejected {
-                return false
-            }
-            
-            // Include all other non-connected peers:
-            // - All peers without sync enabled in any state
-            // - Rejected peers (even if they were known/sync enabled)
-            return true
-        }
-    }
+    @State private var showSettings = false // Added state for settings sheet
     
     var body: some View {
         VStack {
@@ -125,6 +58,14 @@ struct ContentView: View {
                     }
                 }
                 
+                // Settings button
+                Button(action: {
+                    showSettings = true
+                }) {
+                    Image(systemName: "gear")
+                        .foregroundColor(.blue)
+                }
+                
                 Button(action: {
                     showInfoAlert = true
                 }) {
@@ -149,104 +90,16 @@ struct ContentView: View {
                 Text("Are you sure you want to clear all messages? This action cannot be undone.")
             }
             
-            // Devices section with Connections and Available subsections
-            // Always show devices section regardless of sync status
-            VStack(alignment: .leading) {
-                HStack {
-                    Text("Devices")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    Spacer()
-                    
-                    // Removed toggle button to keep device list always visible
-                }
-                
-                // Connected devices section
-                VStack(alignment: .leading) {
-                    Text("My Devices")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 4)
-                    
-                    // Get peers for My Devices section - this includes:
-                    // 1. Currently connected peers
-                    // 2. Previously connected but now disconnected peers (new state)
-                    // 3. Known peers that have sync enabled (in any state except 'rejected')
-                    // 4. Known peers in connecting state or invitation sent state
-                    // Extract into a method to avoid Swift type-checking complexity
-                    let myDevicesPeers = getMyDevicesPeers()
-                    
-                    if !myDevicesPeers.isEmpty {
-                        ForEach(myDevicesPeers) { peer in
-                            PeerRowView(peer: peer, action: {
-                                handlePeerAction(peer)
-                            }, onForget: {
-                                selectedPeer = peer
-                                showForgetConfirmation = true
-                            }, onBlock: {
-                                if let userId = peer.discoveryInfo?["userId"] {
-                                    multipeerService.blockUser(userId: userId)
-                                }
-                            })
-                            .environmentObject(multipeerService)
-                            .padding(.vertical, 2)
-                        }
-                    } else {
-                        HStack {
-                            Spacer()
-                            Text("No known devices")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .italic()
-                            Spacer()
-                        }
-                        .padding(.vertical, 8)
-                    }
-                }
-                
-                // Available devices section
-                VStack(alignment: .leading) {
-                    Text("Other Devices")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 4)
-                    
-                    // Get peers for Other Devices section - peers that are not in My Devices
-                    let availablePeers = getAvailableDevicesPeers()
-                    
-                    if !availablePeers.isEmpty {
-                        ForEach(availablePeers) { peer in
-                            PeerRowView(peer: peer, action: {
-                                handlePeerAction(peer)
-                            }, onForget: {
-                                selectedPeer = peer
-                                showForgetConfirmation = true
-                            }, onBlock: {
-                                if let userId = peer.discoveryInfo?["userId"] {
-                                    multipeerService.blockUser(userId: userId)
-                                }
-                            })
-                            .environmentObject(multipeerService)
-                            .padding(.vertical, 2)
-                        }
-                    } else {
-                        HStack {
-                            Spacer()
-                            Text("No other devices found")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .italic()
-                            Spacer()
-                        }
-                        .padding(.vertical, 8)
-                    }
-                }
+            // Settings sheet
+            .sheet(isPresented: $showSettings) {
+                SettingsView(
+                    isPresented: $showSettings, 
+                    isSyncEnabled: $isSyncEnabled,
+                    currentInvitationPeer: $currentInvitationPeer,
+                    showConnectionRequestAlert: $showConnectionRequestAlert
+                )
+                .environmentObject(multipeerService)
             }
-            .padding(.horizontal)
-            .background(Color.secondary.opacity(0.1))
-            .cornerRadius(8)
-            .padding(.horizontal)
             
             // Message list with improved styling and autoscroll
             ScrollViewReader { scrollView in
@@ -314,29 +167,13 @@ struct ContentView: View {
                 }
             }
             
-            // Device sync controls
+            // Connected peers indicator
             HStack {
-                HStack {
-                    Text("Sync Devices")
-                    Toggle("", isOn: $isSyncEnabled)
-                        .labelsHidden()
-                        .onChange(of: isSyncEnabled) { oldValue, newValue in
-                            if newValue {
-                                multipeerService.startHosting()
-                                multipeerService.startBrowsing()
-                                // Device list is always visible
-                            } else {
-                                multipeerService.disconnect()
-                                // Keep device list visible even when sync is disabled
-                            }
-                        }
-                }
-                
                 Spacer()
                 
                 // Connected peers with improved formatting and badge count
-                if !multipeerService.connectedPeers.isEmpty {
-                    HStack {
+                HStack {
+                    if !multipeerService.connectedPeers.isEmpty {
                         Image(systemName: multipeerService.connectedPeers.count > 1 ? "person.3.fill" : "person.fill")
                             .foregroundColor(.green)
                         
@@ -355,6 +192,16 @@ struct ContentView: View {
                                 .padding(4)
                                 .background(Color.green)
                                 .clipShape(Circle())
+                        }
+                    } else {
+                        if isSyncEnabled {
+                            Text("No devices connected")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("Sync disabled")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }
@@ -377,6 +224,15 @@ struct ContentView: View {
             }
             .padding()
         }
+        // Update sync status when toggle changes in settings view
+        .onChange(of: isSyncEnabled) { oldValue, newValue in
+            if newValue {
+                multipeerService.startHosting()
+                multipeerService.startBrowsing()
+            } else {
+                multipeerService.disconnect()
+            }
+        }
         .onAppear {
             multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Welcome to MultipeerDemo"))
             multipeerService.messages.append(MultipeerService.ChatMessage.systemMessage("Sync is enabled by default"))
@@ -385,7 +241,7 @@ struct ContentView: View {
             multipeerService.startHosting()
             multipeerService.startBrowsing()
             
-            // Log our device categorization logic
+            // Log our device categorization rules
             print("📋 Device categorization rules:")
             print("  - My Devices section includes:")
             print("    1. Connected peers (state == .connected)")
@@ -434,31 +290,6 @@ struct ContentView: View {
                 Text("A device wants to connect. Do you want to accept?")
             }
         }
-        
-        // Forget device confirmation
-        .alert("Forget Device", isPresented: $showForgetConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            
-            Button("Forget", role: .destructive) {
-                if let peer = selectedPeer, let userId = peer.discoveryInfo?["userId"] {
-                    multipeerService.forgetDevice(userId: userId)
-                }
-                selectedPeer = nil
-            }
-            
-            Button("Forget & Block", role: .destructive) {
-                if let peer = selectedPeer, let userId = peer.discoveryInfo?["userId"] {
-                    multipeerService.forgetDevice(userId: userId, andBlock: true)
-                }
-                selectedPeer = nil
-            }
-        } message: {
-            if let peer = selectedPeer {
-                Text("Do you want to forget device \(peer.peerId.displayName)? This will remove it from known peers.")
-            } else {
-                Text("Do you want to forget this device?")
-            }
-        }
     }
     
     private func sendMessage() {
@@ -467,31 +298,6 @@ struct ContentView: View {
         // Send message directly without any platform-specific commands
         multipeerService.sendMessage(messageText)
         messageText = ""
-    }
-    
-    // Handle peer action based on its current state
-    private func handlePeerAction(_ peer: MultipeerService.PeerInfo) {
-        if peer.state == MultipeerService.PeerState.discovered || peer.state == MultipeerService.PeerState.rejected || peer.state == MultipeerService.PeerState.disconnected {
-            // Invite peer (or retry invitation for rejected/disconnected peers)
-            print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue)")
-            multipeerService.invitePeer(peer)
-        } else {
-            // Log why we're not taking action for other states
-            if peer.state == MultipeerService.PeerState.invitationSent {
-                print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: invitation already sent")
-            } else if peer.state == MultipeerService.PeerState.connecting {
-                print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: already connecting")
-            } else if peer.state == MultipeerService.PeerState.connected {
-                print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: already connected")
-            }
-        }
-    }
-    
-    // Show accept/decline invitation dialog
-    private func showAcceptInvitationDialog(from peer: MultipeerService.PeerInfo) {
-        // Use a unified SwiftUI approach for all platforms
-        currentInvitationPeer = peer
-        showConnectionRequestAlert = true
     }
 }
 
@@ -620,6 +426,305 @@ struct PeerItemView: View {
             return .orange
         default:
             return .gray
+        }
+    }
+}
+
+// Settings view for devices and sync controls
+struct SettingsView: View {
+    @EnvironmentObject var multipeerService: MultipeerService
+    @Binding var isPresented: Bool
+    @Binding var isSyncEnabled: Bool
+    @State private var selectedPeer: MultipeerService.PeerInfo?
+    @State private var showForgetConfirmation = false
+    
+    // Helper methods to simplify complex expressions for Swift type-checking
+    private func getMyDevicesPeers() -> [MultipeerService.PeerInfo] {
+        return multipeerService.discoveredPeers.filter { peer in
+            // Include connected peers
+            if peer.state == MultipeerService.PeerState.connected {
+                return true
+            }
+            
+            // Include disconnected peers (previously connected)
+            if peer.state == MultipeerService.PeerState.disconnected {
+                return true
+            }
+            
+            // Get the userId if available
+            let userId = peer.discoveryInfo?["userId"]
+            
+            // Check if this is a known peer with sync enabled
+            let isKnownSyncEnabled = userId != nil && 
+                                    multipeerService.isSyncEnabled(for: userId!)
+            
+            // Don't include rejected peers regardless of other conditions
+            if peer.state == MultipeerService.PeerState.rejected {
+                return false
+            }
+            
+            // Include all connection state peers (discovered, connecting, invitationSent)
+            // that are known and have sync enabled
+            if isKnownSyncEnabled {
+                return true
+            }
+            
+            return false
+        }
+    }
+    
+    private func getAvailableDevicesPeers() -> [MultipeerService.PeerInfo] {
+        return multipeerService.discoveredPeers.filter { peer in
+            // Exclude connected peers (already in My Devices)
+            if peer.state == MultipeerService.PeerState.connected {
+                return false
+            }
+            
+            // Exclude disconnected peers (already in My Devices)
+            if peer.state == MultipeerService.PeerState.disconnected {
+                return false
+            }
+            
+            // Get the userId if available
+            let userId = peer.discoveryInfo?["userId"]
+            
+            // Check if this is a known peer with sync enabled
+            let isKnownSyncEnabled = userId != nil && 
+                                   multipeerService.isSyncEnabled(for: userId!)
+            
+            // Exclude ALL known sync-enabled peers (they go in My Devices)
+            // except for rejected ones
+            if isKnownSyncEnabled && peer.state != MultipeerService.PeerState.rejected {
+                return false
+            }
+            
+            // Include all other non-connected peers:
+            // - All peers without sync enabled in any state
+            // - Rejected peers (even if they were known/sync enabled)
+            return true
+        }
+    }
+    
+    var body: some View {
+        Group {
+            #if os(macOS)
+            // On macOS use a simple VStack with a custom toolbar
+            VStack {
+                HStack {
+                    Text("Settings")
+                        .font(.title)
+                        .fontWeight(.bold)
+                    
+                    Spacer()
+                    
+                    Button("Done") {
+                        isPresented = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding()
+                
+                // Device sync toggle
+                HStack {
+                    Text("Sync Devices")
+                        .font(.headline)
+                    Spacer()
+                    Toggle("", isOn: $isSyncEnabled)
+                        .labelsHidden()
+                        .onChange(of: isSyncEnabled) { oldValue, newValue in
+                            if newValue {
+                                multipeerService.startHosting()
+                                multipeerService.startBrowsing()
+                            } else {
+                                multipeerService.disconnect()
+                            }
+                        }
+                }
+                .padding()
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(8)
+                .padding(.horizontal)
+                
+                // Devices section
+                devicesListView()
+                
+                Spacer()
+            }
+            #else
+            // On iOS use NavigationView for better presentation
+            NavigationView {
+                VStack {
+                    // Device sync toggle
+                    HStack {
+                        Text("Sync Devices")
+                            .font(.headline)
+                        Spacer()
+                        Toggle("", isOn: $isSyncEnabled)
+                            .labelsHidden()
+                            .onChange(of: isSyncEnabled) { oldValue, newValue in
+                                if newValue {
+                                    multipeerService.startHosting()
+                                    multipeerService.startBrowsing()
+                                } else {
+                                    multipeerService.disconnect()
+                                }
+                            }
+                    }
+                    .padding()
+                    .background(Color.secondary.opacity(0.1))
+                    .cornerRadius(8)
+                    .padding(.horizontal)
+                    .padding(.top)
+                    
+                    // Devices section
+                    devicesListView()
+                    
+                    Spacer()
+                }
+                .navigationTitle("Settings")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            isPresented = false
+                        }
+                    }
+                }
+            }
+            #endif
+        }
+        .alert("Forget Device", isPresented: $showForgetConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            
+            Button("Forget", role: .destructive) {
+                if let peer = selectedPeer, let userId = peer.discoveryInfo?["userId"] {
+                    multipeerService.forgetDevice(userId: userId)
+                }
+                selectedPeer = nil
+            }
+            
+            Button("Forget & Block", role: .destructive) {
+                if let peer = selectedPeer, let userId = peer.discoveryInfo?["userId"] {
+                    multipeerService.forgetDevice(userId: userId, andBlock: true)
+                }
+                selectedPeer = nil
+            }
+        } message: {
+            if let peer = selectedPeer {
+                Text("Do you want to forget device \(peer.peerId.displayName)? This will remove it from known peers.")
+            } else {
+                Text("Do you want to forget this device?")
+            }
+        }
+    }
+    
+    // Extract devices list view to avoid duplication
+    @ViewBuilder
+    private func devicesListView() -> some View {
+        VStack(alignment: .leading) {
+            HStack {
+                Text("Devices")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                Spacer()
+            }
+            
+            // Connected devices section
+            VStack(alignment: .leading) {
+                Text("My Devices")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 4)
+                
+                let myDevicesPeers = getMyDevicesPeers()
+                
+                if !myDevicesPeers.isEmpty {
+                    ForEach(myDevicesPeers) { peer in
+                        PeerRowView(peer: peer, action: {
+                            handlePeerAction(peer)
+                        }, onForget: {
+                            selectedPeer = peer
+                            showForgetConfirmation = true
+                        }, onBlock: {
+                            if let userId = peer.discoveryInfo?["userId"] {
+                                multipeerService.blockUser(userId: userId)
+                            }
+                        })
+                        .environmentObject(multipeerService)
+                        .padding(.vertical, 2)
+                    }
+                } else {
+                    HStack {
+                        Spacer()
+                        Text("No known devices")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .italic()
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+            
+            // Available devices section
+            VStack(alignment: .leading) {
+                Text("Other Devices")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 4)
+                
+                let availablePeers = getAvailableDevicesPeers()
+                
+                if !availablePeers.isEmpty {
+                    ForEach(availablePeers) { peer in
+                        PeerRowView(peer: peer, action: {
+                            handlePeerAction(peer)
+                        }, onForget: {
+                            selectedPeer = peer
+                            showForgetConfirmation = true
+                        }, onBlock: {
+                            if let userId = peer.discoveryInfo?["userId"] {
+                                multipeerService.blockUser(userId: userId)
+                            }
+                        })
+                        .environmentObject(multipeerService)
+                        .padding(.vertical, 2)
+                    }
+                } else {
+                    HStack {
+                        Spacer()
+                        Text("No other devices found")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .italic()
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .padding(.horizontal)
+        .background(Color.secondary.opacity(0.1))
+        .cornerRadius(8)
+        .padding(.horizontal)
+    }
+    
+    // Handle peer action based on its current state
+    private func handlePeerAction(_ peer: MultipeerService.PeerInfo) {
+        if peer.state == MultipeerService.PeerState.discovered || peer.state == MultipeerService.PeerState.rejected || peer.state == MultipeerService.PeerState.disconnected {
+            // Invite peer (or retry invitation for rejected/disconnected peers)
+            print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue)")
+            multipeerService.invitePeer(peer)
+        } else {
+            // Log why we're not taking action for other states
+            if peer.state == MultipeerService.PeerState.invitationSent {
+                print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: invitation already sent")
+            } else if peer.state == MultipeerService.PeerState.connecting {
+                print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: already connecting")
+            } else if peer.state == MultipeerService.PeerState.connected {
+                print("👆 User tapped \(peer.peerId.displayName) with state \(peer.state.rawValue) - No action taken: already connected")
+            }
         }
     }
 }
