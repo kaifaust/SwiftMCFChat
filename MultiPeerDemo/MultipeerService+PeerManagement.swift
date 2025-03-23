@@ -234,6 +234,18 @@ extension MultipeerService {
                syncEnabledPeers.contains(userId)
     }
     
+    /// Determine if this device should initiate the connection based on deterministic leader election
+    /// Uses UUID comparison to ensure only one side initiates, preventing race conditions
+    func shouldInitiateConnection(to remoteUserId: String) -> Bool {
+        guard UUID(uuidString: remoteUserId) != nil else {
+            // If can't parse remote UUID, default to initiating connection
+            return true
+        }
+        
+        // Compare UUIDs lexicographically - device with "lower" UUID is the leader and initiates
+        return self.userId.uuidString.compare(remoteUserId) == .orderedAscending
+    }
+    
     // MARK: - Device Management
     
     /// Forget a device - remove from known peers, sync-enabled peers, and optionally block
