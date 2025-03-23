@@ -31,7 +31,7 @@ struct ContentView: View {
     
     var body: some View {
         VStack {
-            // Header with more status information
+            // Simplified header
             HStack {
                 Text("MultipeerDemo")
                     .font(.headline)
@@ -43,42 +43,18 @@ struct ContentView: View {
                     showClearConfirmation = true
                 }) {
                     Image(systemName: "trash")
+                        .font(.system(size: 22))
                         .foregroundColor(.red)
                 }
-                
-                // Connection status with more details
-                HStack {
-                    Circle()
-                        .fill(multipeerService.connectedPeers.isEmpty ? .red : .green)
-                        .frame(width: 10, height: 10)
-                    
-                    Text("\(multipeerService.connectedPeers.count) connected")
-                        .font(.caption)
-                    
-                    if isSyncEnabled {
-                        Image(systemName: "network")
-                            .foregroundColor(.blue)
-                    }
-                }
+                .padding(.horizontal, 4)
                 
                 // Settings button
                 Button(action: {
                     showSettings = true
                 }) {
                     Image(systemName: "gear")
+                        .font(.system(size: 22))
                         .foregroundColor(.blue)
-                }
-                
-                Button(action: {
-                    showInfoAlert = true
-                }) {
-                    Image(systemName: "info.circle")
-                        .foregroundColor(.blue)
-                }
-                .alert("Connection Information", isPresented: $showInfoAlert) {
-                    Button("OK", role: .cancel) { }
-                } message: {
-                    Text("Hosting: \(multipeerService.isHosting ? "Yes" : "No")\nBrowsing: \(multipeerService.isBrowsing ? "Yes" : "No")\nPeers: \(multipeerService.connectedPeers.map { $0.displayName }.joined(separator: ", "))")
                 }
             }
             .padding()
@@ -170,46 +146,6 @@ struct ContentView: View {
                 }
             }
             
-            // Connected peers indicator
-            HStack {
-                Spacer()
-                
-                // Connected peers with improved formatting and badge count
-                HStack {
-                    if !multipeerService.connectedPeers.isEmpty {
-                        Image(systemName: multipeerService.connectedPeers.count > 1 ? "person.3.fill" : "person.fill")
-                            .foregroundColor(.green)
-                        
-                        Text(multipeerService.connectedPeers.map { $0.displayName }.joined(separator: ", "))
-                            .font(.caption)
-                            .foregroundColor(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .padding(.trailing, 4)
-                        
-                        // Add badge with count
-                        if multipeerService.connectedPeers.count > 0 {
-                            Text("\(multipeerService.connectedPeers.count)")
-                                .font(.caption2.bold())
-                                .foregroundColor(.white)
-                                .padding(4)
-                                .background(Color.green)
-                                .clipShape(Circle())
-                        }
-                    } else {
-                        if isSyncEnabled {
-                            Text("No devices connected")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("Sync disabled")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-            }
-            .padding()
             
             // Message input with improved UI
             HStack {
