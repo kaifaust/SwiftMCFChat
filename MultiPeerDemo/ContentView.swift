@@ -26,6 +26,9 @@ struct ContentView: View {
     @State private var showForgetConfirmation = false
     @State private var showSettings = false // Added state for settings sheet
     
+    // Specifically for handling connection requests in settings view
+    @State private var settingsShowConnectionAlert = false
+    
     var body: some View {
         VStack {
             // Header with more status information
@@ -96,7 +99,7 @@ struct ContentView: View {
                     isPresented: $showSettings, 
                     isSyncEnabled: $isSyncEnabled,
                     currentInvitationPeer: $currentInvitationPeer,
-                    showConnectionRequestAlert: $showConnectionRequestAlert
+                    showConnectionRequestAlert: $settingsShowConnectionAlert
                 )
                 .environmentObject(multipeerService)
             }
@@ -263,13 +266,22 @@ struct ContentView: View {
                     peerInfo = MultipeerService.PeerInfo(peerId: peerID, state: MultipeerService.PeerState.discovered)
                 }
                 
-                // Show the connection request dialog immediately
+                // Set up the invitation peer so it's available to both views
                 currentInvitationPeer = peerInfo
-                showConnectionRequestAlert = true
+                
+                // Show the connection request in the appropriate view
+                if showSettings {
+                    // If settings view is open, show the alert there
+                    settingsShowConnectionAlert = true
+                } else {
+                    // Otherwise, show it in the main view
+                    showConnectionRequestAlert = true
+                }
             }
         }
         // Add universal connection request alert
-        // Connection request alert
+        // On iOS, this is always shown in the main view
+        // On macOS, this is only shown when the settings sheet is not open
         .alert("Connection Request", isPresented: $showConnectionRequestAlert) {
             Button("Accept") {
                 if let peer = currentInvitationPeer {
@@ -435,6 +447,8 @@ struct SettingsView: View {
     @EnvironmentObject var multipeerService: MultipeerService
     @Binding var isPresented: Bool
     @Binding var isSyncEnabled: Bool
+    @Binding var currentInvitationPeer: MultipeerService.PeerInfo?
+    @Binding var showConnectionRequestAlert: Bool
     @State private var selectedPeer: MultipeerService.PeerInfo?
     @State private var showForgetConfirmation = false
     
@@ -593,6 +607,7 @@ struct SettingsView: View {
             }
             #endif
         }
+        // Forget device alert
         .alert("Forget Device", isPresented: $showForgetConfirmation) {
             Button("Cancel", role: .cancel) { }
             
@@ -614,6 +629,27 @@ struct SettingsView: View {
                 Text("Do you want to forget device \(peer.peerId.displayName)? This will remove it from known peers.")
             } else {
                 Text("Do you want to forget this device?")
+            }
+        }
+        // Connection request alert for settings view
+        .alert("Connection Request", isPresented: $showConnectionRequestAlert) {
+            Button("Accept") {
+                if let peer = currentInvitationPeer {
+                    multipeerService.acceptInvitation(from: peer, accept: true)
+                }
+                currentInvitationPeer = nil
+            }
+            Button("Decline", role: .cancel) {
+                if let peer = currentInvitationPeer {
+                    multipeerService.acceptInvitation(from: peer, accept: false)
+                }
+                currentInvitationPeer = nil
+            }
+        } message: {
+            if let peer = currentInvitationPeer {
+                Text("\(peer.peerId.displayName) wants to connect. Do you want to accept?")
+            } else {
+                Text("A device wants to connect. Do you want to accept?")
             }
         }
     }
