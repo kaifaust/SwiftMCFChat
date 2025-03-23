@@ -36,7 +36,7 @@ struct PeerRowView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     
-                    // Peer state with sync status indicator
+                    // Peer state
                     HStack(spacing: 4) {
                         // Show status with nearby information for disconnected peers
                         if peer.state == .disconnected {
@@ -53,13 +53,6 @@ struct PeerRowView: View {
                             Text(peer.state.rawValue)
                                 .font(.caption)
                                 .foregroundColor(colorForState(peer.state))
-                        }
-                        
-                        if let userId = peer.discoveryInfo?["userId"], 
-                           multipeerService.isSyncEnabled(for: userId) {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.caption2)
-                                .foregroundColor(.blue)
                         }
                     }
                 }
